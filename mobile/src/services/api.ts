@@ -48,9 +48,11 @@ export interface VoiceResponse {
   error?: string;
 }
 
-export interface HistoryMessage {
-  role: "user" | "assistant";
-  content: string;
+export interface StreamEvent {
+  type: "status" | "result";
+  message?: string;      // for status
+  response?: string;      // for result
+  [key: string]: any;     // rest of VoiceResponse fields
 }
 
 export interface ConversationSummary {
@@ -126,14 +128,7 @@ export interface GlobalStats {
   totalCostPln: string;
 }
 
-interface Pagination {
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
-}
-
-// ── Endpoints ──
+// ── Voice command (non-streaming, for normal requests) ──
 
 export async function sendVoiceCommand(
   text: string,
@@ -143,22 +138,80 @@ export async function sendVoiceCommand(
   const res = await fetch(`${API_URL}/api/voice`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ text, conversationId, model }),
+    body: JSON.stringify({ text, conversationId, model, stream: false }),
   });
   if (!res.ok) throw new Error(`Server error ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
-export async function getConversations(
-  page = 1,
-  limit = 20,
-  search?: string,
-): Promise<{ conversations: ConversationSummary[]; pagination: Pagination }> {
+// ── Voice command (streaming, for research) ──
+
+export async function sendVoiceStreaming(
+  text: string,
+  conversationId: string | undefined,
+  model: ModelId,
+  onStatus: (msg: string) => void,
+): Promise<VoiceResponse> {
+  const res = await fetch(`${API_URL}/api/voice`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ text, conversationId, model, stream: true }),
+  });
+
+  if (!res.ok) throw new Error(`Server error ${res.status}: ${await res.text()}`);
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("No readable stream");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: VoiceResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parsuj linie NDJSON
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // ostatnia (niekompletna) linia wraca do bufora
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const event: StreamEvent = JSON.parse(line);
+        if (event.type === "status" && event.message) {
+          onStatus(event.message);
+        } else if (event.type === "result") {
+          finalResult = event as unknown as VoiceResponse;
+        }
+      } catch {
+        // Ignoruj nieparsowalne linie
+      }
+    }
+  }
+
+  // Obsłuż resztę bufora
+  if (buffer.trim()) {
+    try {
+      const event = JSON.parse(buffer);
+      if (event.type === "result") finalResult = event as unknown as VoiceResponse;
+    } catch {}
+  }
+
+  if (!finalResult) throw new Error("No result received from stream");
+  return finalResult;
+}
+
+// ── Other endpoints (unchanged) ──
+
+export async function getConversations(page = 1, limit = 20, search?: string) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (search) params.set("search", search);
   const res = await fetch(`${API_URL}/api/conversations?${params}`, { headers: headers() });
   if (!res.ok) throw new Error(`Error ${res.status}`);
-  return res.json();
+  return res.json() as Promise<{ conversations: ConversationSummary[]; pagination: any }>;
 }
 
 export async function getConversation(id: string, search?: string): Promise<ConversationDetail> {
@@ -169,11 +222,7 @@ export async function getConversation(id: string, search?: string): Promise<Conv
 }
 
 export async function updateConversationTopic(id: string, topic: string) {
-  await fetch(`${API_URL}/api/conversations/${id}`, {
-    method: "PUT",
-    headers: headers(),
-    body: JSON.stringify({ topic }),
-  });
+  await fetch(`${API_URL}/api/conversations/${id}`, { method: "PUT", headers: headers(), body: JSON.stringify({ topic }) });
 }
 
 export async function deleteConversation(id: string) {
