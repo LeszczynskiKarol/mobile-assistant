@@ -36,8 +36,7 @@ DOSTĘPNE AKCJE:
    params: { text: string, date: string (ISO) }
 8. note — zapisanie notatki
    params: { text: string, tags?: string[] }
-9. web_search — wyszukanie informacji w internecie
-   params: { query: string }
+
 
 ZASADY:
 - Odpowiadaj ZAWSZE po polsku
@@ -99,10 +98,20 @@ export async function interpretIntent(text, opts = {}) {
   const outputTokens = response.usage?.output_tokens || 0;
   const costUsd = calculateCost(model, inputTokens, outputTokens);
 
-  const stats = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, costUsd, model, latencyMs };
+  const stats = {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    costUsd,
+    model,
+    latencyMs,
+  };
 
   try {
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const cleaned = raw
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
     const parsed = JSON.parse(cleaned);
     return {
       response: parsed.response || "Nie zrozumiałem polecenia.",
@@ -127,7 +136,8 @@ export async function generateTopic(firstUserMessage) {
     const response = await client.messages.create({
       model: "claude-haiku-4-5",
       max_tokens: 60,
-      system: "Wygeneruj ULTRA krótki temat konwersacji (3-6 słów, po polsku) na podstawie pierwszej wiadomości użytkownika. Zwróć TYLKO temat, nic więcej. Bez cudzysłowów, bez kropki na końcu.",
+      system:
+        "Wygeneruj ULTRA krótki temat konwersacji (3-6 słów, po polsku) na podstawie pierwszej wiadomości użytkownika. Zwróć TYLKO temat, nic więcej. Bez cudzysłowów, bez kropki na końcu.",
       messages: [{ role: "user", content: firstUserMessage }],
     });
     return (response.content[0]?.text || "Nowa konwersacja").trim();
