@@ -1,5 +1,6 @@
 const API_URL = __DEV__ ? "https://voice.torweb.pl" : "https://voice.torweb.pl";
-const VOICE_TOKEN = "f7c26267a418c3ddeaafbdcbf3e883e958b68f7df586e8b58492a6869b9e36dd";
+const VOICE_TOKEN =
+  "f7c26267a418c3ddeaafbdcbf3e883e958b68f7df586e8b58492a6869b9e36dd";
 
 const headers = () => ({
   "Content-Type": "application/json",
@@ -50,9 +51,9 @@ export interface VoiceResponse {
 
 export interface StreamEvent {
   type: "status" | "result";
-  message?: string;      // for status
-  response?: string;      // for result
-  [key: string]: any;     // rest of VoiceResponse fields
+  message?: string; // for status
+  response?: string; // for result
+  [key: string]: any; // rest of VoiceResponse fields
 }
 
 export interface ConversationSummary {
@@ -140,97 +141,114 @@ export async function sendVoiceCommand(
     headers: headers(),
     body: JSON.stringify({ text, conversationId, model, stream: false }),
   });
-  if (!res.ok) throw new Error(`Server error ${res.status}: ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`Server error ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
 // ── Voice command (streaming, for research) ──
 
-export async function sendVoiceStreaming(
+export function sendVoiceStreaming(
   text: string,
   conversationId: string | undefined,
   model: ModelId,
   onStatus: (msg: string) => void,
 ): Promise<VoiceResponse> {
-  const res = await fetch(`${API_URL}/api/voice`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ text, conversationId, model, stream: true }),
-  });
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/api/voice`);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.setRequestHeader("Authorization", `Bearer ${VOICE_TOKEN}`);
 
-  if (!res.ok) throw new Error(`Server error ${res.status}: ${await res.text()}`);
+    let lastIndex = 0;
 
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("No readable stream");
+    xhr.onprogress = () => {
+      const newChunk = xhr.responseText.substring(lastIndex);
+      lastIndex = xhr.responseText.length;
 
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalResult: VoiceResponse | null = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // Parsuj linie NDJSON
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || ""; // ostatnia (niekompletna) linia wraca do bufora
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event: StreamEvent = JSON.parse(line);
-        if (event.type === "status" && event.message) {
-          onStatus(event.message);
-        } else if (event.type === "result") {
-          finalResult = event as unknown as VoiceResponse;
-        }
-      } catch {
-        // Ignoruj nieparsowalne linie
+      const lines = newChunk.split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "status" && event.message) {
+            onStatus(event.message);
+          }
+        } catch {}
       }
-    }
-  }
+    };
 
-  // Obsłuż resztę bufora
-  if (buffer.trim()) {
-    try {
-      const event = JSON.parse(buffer);
-      if (event.type === "result") finalResult = event as unknown as VoiceResponse;
-    } catch {}
-  }
+    xhr.onload = () => {
+      const lines = xhr.responseText.split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "result") {
+            resolve(event as unknown as VoiceResponse);
+            return;
+          }
+        } catch {}
+      }
+      reject(new Error("No result in stream"));
+    };
 
-  if (!finalResult) throw new Error("No result received from stream");
-  return finalResult;
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.ontimeout = () => reject(new Error("Timeout"));
+    xhr.timeout = 120000;
+
+    xhr.send(JSON.stringify({ text, conversationId, model, stream: true }));
+  });
 }
 
 // ── Other endpoints (unchanged) ──
 
 export async function getConversations(page = 1, limit = 20, search?: string) {
-  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
   if (search) params.set("search", search);
-  const res = await fetch(`${API_URL}/api/conversations?${params}`, { headers: headers() });
+  const res = await fetch(`${API_URL}/api/conversations?${params}`, {
+    headers: headers(),
+  });
   if (!res.ok) throw new Error(`Error ${res.status}`);
-  return res.json() as Promise<{ conversations: ConversationSummary[]; pagination: any }>;
+  return res.json() as Promise<{
+    conversations: ConversationSummary[];
+    pagination: any;
+  }>;
 }
 
-export async function getConversation(id: string, search?: string): Promise<ConversationDetail> {
+export async function getConversation(
+  id: string,
+  search?: string,
+): Promise<ConversationDetail> {
   const q = search ? `?search=${encodeURIComponent(search)}` : "";
-  const res = await fetch(`${API_URL}/api/conversations/${id}${q}`, { headers: headers() });
+  const res = await fetch(`${API_URL}/api/conversations/${id}${q}`, {
+    headers: headers(),
+  });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }
 
 export async function updateConversationTopic(id: string, topic: string) {
-  await fetch(`${API_URL}/api/conversations/${id}`, { method: "PUT", headers: headers(), body: JSON.stringify({ topic }) });
+  await fetch(`${API_URL}/api/conversations/${id}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify({ topic }),
+  });
 }
 
 export async function deleteConversation(id: string) {
-  await fetch(`${API_URL}/api/conversations/${id}`, { method: "DELETE", headers: headers() });
+  await fetch(`${API_URL}/api/conversations/${id}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
 }
 
 export async function globalSearch(q: string): Promise<SearchResult> {
-  const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(q)}&limit=20`, { headers: headers() });
+  const res = await fetch(
+    `${API_URL}/api/search?q=${encodeURIComponent(q)}&limit=20`,
+    { headers: headers() },
+  );
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }
