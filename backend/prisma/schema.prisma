@@ -4,16 +4,14 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model Conversation {
   id        String   @id @default(cuid())
-  topic     String?  // generowany przez Claude z pierwszego prompta
+  topic     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Zagregowane statystyki (aktualizowane po każdej wiadomości)
   totalInputTokens  Int   @default(0)
   totalOutputTokens Int   @default(0)
   totalCostUsd      Float @default(0)
@@ -30,10 +28,9 @@ model Message {
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
-  role    String // 'user' | 'assistant'
-  content String // treść wiadomości
+  role    String
+  content String
 
-  // Statystyki tokenów (tylko dla assistant, null dla user)
   inputTokens  Int?
   outputTokens Int?
   totalTokens  Int?
@@ -41,9 +38,8 @@ model Message {
   model        String?
   latencyMs    Int?
 
-  // Dane z Claude response (tylko assistant)
-  actions    Json?   // wykonane akcje
-  thinking   String? // co Claude "pomyślał"
+  actions    Json?
+  thinking   String?
   needsInput Boolean @default(false)
 
   createdAt DateTime @default(now())
