@@ -22,7 +22,7 @@ Głosowy asystent AI na Androida. Mówisz po polsku → Claude interpretuje inte
 ## Koszt
 
 | Komponent         | Koszt              |
-|-------------------|--------------------|
+| ----------------- | ------------------ |
 | Android STT       | **0 zł** (natywny) |
 | Android TTS       | **0 zł** (natywny) |
 | Claude Sonnet API | ~$3/mln input tok  |
@@ -39,8 +39,8 @@ Głosowy asystent AI na Androida. Mówisz po polsku → Claude interpretuje inte
 ```bash
 # Na jednej z Twoich 4 instancji EC2
 cd /home/ubuntu
-git clone <repo> voice-assistant
-cd voice-assistant/backend
+git clone <repo> mobile-assistant
+cd mobile-assistant/backend
 
 npm install
 cp .env.example .env
@@ -52,15 +52,18 @@ nano .env   # uzupełnij klucze
 **Claude:** Klucz API z console.anthropic.com
 
 **Trello:**
+
 1. Wejdź na https://trello.com/power-ups/admin → wygeneruj API Key
 2. Token: https://trello.com/1/authorize?key=TWOJ_KEY&scope=read,write&name=VoiceAssistant&expiration=never&response_type=token
 3. Board ID: otwórz board → dodaj `.json` do URL → skopiuj `id`
 4. List ID: w tym samym JSON znajdź `lists[].id`
 
 **Google (Gmail + Calendar):**
+
 1. Google Cloud Console → APIs → włącz Gmail API + Calendar API
 2. Credentials → OAuth 2.0 → Desktop App
 3. Uzyskaj refresh_token:
+
 ```bash
 # Consent screen → scopes: gmail.send, gmail.compose, calendar.events
 # OAuth Playground: https://developers.google.com/oauthplayground/
@@ -74,7 +77,7 @@ npx google-auth-library authorize \
 ### 3. PM2
 
 ```bash
-pm2 start src/server.js --name voice-assistant
+pm2 start src/server.js --name mobile-assistant
 pm2 save
 ```
 
@@ -101,17 +104,18 @@ server {
 ### 1. Instalacja
 
 ```bash
-cd voice-assistant/mobile
+cd mobile-assistant/mobile
 npm install
 ```
 
 ### 2. Konfiguracja API URL
 
 Edytuj `src/services/api.ts`:
+
 ```typescript
 const API_URL = __DEV__
-  ? 'http://TWOJE_IP_LAN:3500'      // dev — IP Twojego PC w sieci
-  : 'https://voice.torweb.pl';       // prod
+  ? "http://TWOJE_IP_LAN:3500" // dev — IP Twojego PC w sieci
+  : "https://voice.torweb.pl"; // prod
 ```
 
 ### 3. Development
@@ -140,13 +144,13 @@ Musisz zrobić `npx expo run:android` lub `eas build`.
 ```javascript
 // backend/src/actions/slack.js
 export async function slackSendMessage({ channel, text }) {
-  const res = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
+  const res = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
-      'Content-Type': 'application/json'
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify({ channel, text })
+    body: JSON.stringify({ channel, text }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error);

@@ -1,15 +1,13 @@
 {
   "expo": {
-    "name": "VoiceAssistant",
-    "slug": "voice-assistant",
+    "name": "MobileAssistant",
+    "slug": "mobile-assistant",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "voice-assistant",
-    "platforms": [
-      "android"
-    ],
+    "scheme": "mobile-assistant",
+    "platforms": ["android"],
     "android": {
-      "package": "pl.torweb.voiceassistant",
+      "package": "pl.torweb.mobileassistant",
       "adaptiveIcon": {
         "backgroundColor": "#0f172a"
       },
@@ -24,8 +22,8 @@
       [
         "@react-native-voice/voice",
         {
-          "microphonePermission": "VoiceAssistant potrzebuje mikrofonu do rozpoznawania mowy",
-          "speechRecognitionPermission": "VoiceAssistant potrzebuje rozpoznawania mowy"
+          "microphonePermission": "MobileAssistant potrzebuje mikrofonu do rozpoznawania mowy",
+          "speechRecognitionPermission": "MobileAssistant potrzebuje rozpoznawania mowy"
         }
       ]
     ],

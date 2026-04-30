@@ -58,14 +58,14 @@ jobs:
             npx prisma generate
 
             echo "=== Restart PM2 ==="
-            pm2 restart voice-assistant || pm2 start src/server.js --name voice-assistant
+            pm2 restart mobile-assistant || pm2 start src/server.js --name mobile-assistant
             pm2 save
 
             sleep 2
             echo "=== Status ==="
             pm2 list
             echo "=== Last 5 logs ==="
-            pm2 logs voice-assistant --lines 5 --nostream
+            pm2 logs mobile-assistant --lines 5 --nostream
 
       - name: Close SSH
         if: always()
