@@ -5,7 +5,9 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "voice-assistant",
-    "platforms": ["android"],
+    "platforms": [
+      "android"
+    ],
     "android": {
       "package": "pl.torweb.voiceassistant",
       "adaptiveIcon": {
@@ -13,7 +15,8 @@
       },
       "permissions": [
         "RECORD_AUDIO",
-        "INTERNET"
+        "INTERNET",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "plugins": [
@@ -25,6 +28,15 @@
           "speechRecognitionPermission": "VoiceAssistant potrzebuje rozpoznawania mowy"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "d9550f1b-8d88-4274-b29c-939e10ff70a4"
+      }
+    },
+    "owner": "karolleszczynski"
   }
 }

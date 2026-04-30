@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic(); // uses ANTHROPIC_API_KEY from env
 
@@ -62,19 +62,20 @@ FORMAT ODPOWIEDZI:
 export async function interpretIntent(text, opts = {}) {
   const { context, history } = opts;
 
-  const now = new Date().toLocaleString('pl-PL', {
-    timeZone: 'Europe/Warsaw',
-    dateStyle: 'full',
-    timeStyle: 'short'
+  const now = new Date().toLocaleString("pl-PL", {
+    timeZone: "Europe/Warsaw",
+    dateStyle: "full",
+    timeStyle: "short",
   });
 
-  const systemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_TIME}}', now);
+  const systemPrompt = SYSTEM_PROMPT.replace("{{CURRENT_TIME}}", now);
 
   // Buduj messages — opcjonalnie z historią konwersacji
   const messages = [];
 
   if (history?.length) {
-    for (const msg of history.slice(-10)) { // max 10 ostatnich wiadomości
+    for (const msg of history.slice(-10)) {
+      // max 10 ostatnich wiadomości
       messages.push({ role: msg.role, content: msg.content });
     }
   }
@@ -83,35 +84,38 @@ export async function interpretIntent(text, opts = {}) {
   if (context) {
     userContent += `\n\n[Kontekst: ${JSON.stringify(context)}]`;
   }
-  messages.push({ role: 'user', content: userContent });
+  messages.push({ role: "user", content: userContent });
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',  // sonnet = tani i szybki, wystarczy do intent detection
+    model: "claude-haiku-4-5", // sonnet = tani i szybki, wystarczy do intent detection
     max_tokens: 1024,
     system: systemPrompt,
-    messages
+    messages,
   });
 
-  const raw = response.content[0]?.text || '';
+  const raw = response.content[0]?.text || "";
 
   try {
     // Parsuj JSON — Claude powinien zwracać czysty JSON
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const cleaned = raw
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
     const parsed = JSON.parse(cleaned);
 
     return {
-      response: parsed.response || 'Nie zrozumiałem polecenia.',
+      response: parsed.response || "Nie zrozumiałem polecenia.",
       actions: parsed.actions || [],
-      thinking: parsed.thinking || '',
-      needsInput: parsed.needsInput || false
+      thinking: parsed.thinking || "",
+      needsInput: parsed.needsInput || false,
     };
   } catch (parseErr) {
     // Fallback — Claude zwrócił tekst zamiast JSON
     return {
       response: raw.slice(0, 500),
       actions: [],
-      thinking: 'Parse error — Claude nie zwrócił JSON',
-      needsInput: false
+      thinking: "Parse error — Claude nie zwrócił JSON",
+      needsInput: false,
     };
   }
 }

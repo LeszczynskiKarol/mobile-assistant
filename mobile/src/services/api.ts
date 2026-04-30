@@ -1,15 +1,14 @@
 // Zmień na adres Twojego serwera
-const API_URL = __DEV__
-  ? 'http://192.168.1.100:3001'   // lokalne IP dev maszyny, port copywriting24
-  : 'https://copywriting24.pl';   // produkcja — ten sam serwer
+const API_URL = __DEV__ ? "https://voice.torweb.pl" : "https://voice.torweb.pl";
 
 // ⚠️ Wklej tutaj swój VOICE_API_TOKEN (ten sam co w .env backendu)
-const VOICE_TOKEN = 'ZMIEN_NA_SWOJ_TOKEN';
+const VOICE_TOKEN =
+  "f7c26267a418c3ddeaafbdcbf3e883e958b68f7df586e8b58492a6869b9e36dd";
 
 export interface VoiceAction {
   action: string;
   params: Record<string, any>;
-  status?: 'success' | 'error';
+  status?: "success" | "error";
   result?: any;
   error?: string;
 }
@@ -23,7 +22,7 @@ export interface VoiceResponse {
 }
 
 export interface HistoryMessage {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
 }
 
@@ -32,15 +31,15 @@ export interface HistoryMessage {
  */
 export async function sendVoiceCommand(
   text: string,
-  history: HistoryMessage[] = []
+  history: HistoryMessage[] = [],
 ): Promise<VoiceResponse> {
   const res = await fetch(`${API_URL}/api/voice`, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${VOICE_TOKEN}`,
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${VOICE_TOKEN}`,
     },
-    body: JSON.stringify({ text, history })
+    body: JSON.stringify({ text, history }),
   });
 
   if (!res.ok) {
@@ -56,7 +55,7 @@ export async function sendVoiceCommand(
  */
 export async function getAvailableActions() {
   const res = await fetch(`${API_URL}/api/voice/actions`, {
-    headers: { 'Authorization': `Bearer ${VOICE_TOKEN}` },
+    headers: { Authorization: `Bearer ${VOICE_TOKEN}` },
   });
   return res.json();
 }
