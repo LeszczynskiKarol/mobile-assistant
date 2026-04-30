@@ -1,4 +1,7 @@
 # Dependencies
+ecosystem.config.cjs
+*ecosystem.config.cjs
+
 node_modules/
 */node_modules/
 package-lock.json
