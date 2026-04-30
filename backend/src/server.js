@@ -5,7 +5,7 @@ import rateLimit from "@fastify/rate-limit";
 import { voiceRoutes } from "./routes/voice.js";
 import { conversationRoutes } from "./routes/conversations.js";
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: warn });
 
 await app.register(cors, { origin: true });
 await app.register(rateLimit, { max: 120, timeWindow: "1 minute" });

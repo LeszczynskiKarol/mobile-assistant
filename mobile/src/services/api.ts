@@ -1,14 +1,14 @@
 const API_URL = __DEV__ ? "https://voice.torweb.pl" : "https://voice.torweb.pl";
-
-const VOICE_TOKEN =
-  "f7c26267a418c3ddeaafbdcbf3e883e958b68f7df586e8b58492a6869b9e36dd";
+const VOICE_TOKEN = "f7c26267a418c3ddeaafbdcbf3e883e958b68f7df586e8b58492a6869b9e36dd";
 
 const headers = () => ({
   "Content-Type": "application/json",
   Authorization: `Bearer ${VOICE_TOKEN}`,
 });
 
-// ── Typy ──────────────────────────────────────────────────────
+// ── Types ──
+
+export type ModelId = "claude-haiku-4-5" | "claude-sonnet-4-6";
 
 export interface VoiceAction {
   action: string;
@@ -27,6 +27,12 @@ export interface VoiceStats {
   latencyMs: number;
 }
 
+export interface Source {
+  index: number;
+  title: string;
+  url: string;
+}
+
 export interface VoiceResponse {
   response: string;
   actions: VoiceAction[];
@@ -36,6 +42,9 @@ export interface VoiceResponse {
   messageId: string;
   isNewConversation: boolean;
   stats: VoiceStats;
+  sources: Source[];
+  researchStatus: string[];
+  didResearch: boolean;
   error?: string;
 }
 
@@ -53,11 +62,7 @@ export interface ConversationSummary {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCostUsd: number;
-  lastMessage: {
-    content: string;
-    role: string;
-    createdAt: string;
-  } | null;
+  lastMessage: { content: string; role: string; createdAt: string } | null;
 }
 
 export interface ConversationMessage {
@@ -88,7 +93,6 @@ export interface ConversationDetail {
     totalCostUsd: number;
   };
   messages: ConversationMessage[];
-  searchQuery: string | null;
 }
 
 export interface SearchResult {
@@ -103,7 +107,7 @@ export interface SearchResult {
       conversationTopic: string;
       matchContext: string;
     }[];
-    pagination: Pagination;
+    pagination: { total: number };
   };
   conversationResults: {
     id: string;
@@ -129,106 +133,61 @@ interface Pagination {
   totalPages: number;
 }
 
-// ── Główny endpoint voice ─────────────────────────────────────
+// ── Endpoints ──
 
 export async function sendVoiceCommand(
   text: string,
   conversationId?: string,
+  model: ModelId = "claude-haiku-4-5",
 ): Promise<VoiceResponse> {
   const res = await fetch(`${API_URL}/api/voice`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ text, conversationId }),
+    body: JSON.stringify({ text, conversationId, model }),
   });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Server error ${res.status}: ${errText}`);
-  }
+  if (!res.ok) throw new Error(`Server error ${res.status}: ${await res.text()}`);
   return res.json();
 }
-
-// ── Konwersacje ───────────────────────────────────────────────
 
 export async function getConversations(
   page = 1,
   limit = 20,
   search?: string,
-): Promise<{
-  conversations: ConversationSummary[];
-  pagination: Pagination;
-}> {
-  const params = new URLSearchParams({
-    page: String(page),
-    limit: String(limit),
-  });
+): Promise<{ conversations: ConversationSummary[]; pagination: Pagination }> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (search) params.set("search", search);
-
-  const res = await fetch(`${API_URL}/api/conversations?${params}`, {
-    headers: headers(),
-  });
+  const res = await fetch(`${API_URL}/api/conversations?${params}`, { headers: headers() });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }
 
-export async function getConversation(
-  id: string,
-  search?: string,
-): Promise<ConversationDetail> {
-  const params = search
-    ? `?search=${encodeURIComponent(search)}`
-    : "";
-  const res = await fetch(`${API_URL}/api/conversations/${id}${params}`, {
-    headers: headers(),
-  });
+export async function getConversation(id: string, search?: string): Promise<ConversationDetail> {
+  const q = search ? `?search=${encodeURIComponent(search)}` : "";
+  const res = await fetch(`${API_URL}/api/conversations/${id}${q}`, { headers: headers() });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }
 
-export async function updateConversationTopic(
-  id: string,
-  topic: string,
-): Promise<{ id: string; topic: string }> {
-  const res = await fetch(`${API_URL}/api/conversations/${id}`, {
+export async function updateConversationTopic(id: string, topic: string) {
+  await fetch(`${API_URL}/api/conversations/${id}`, {
     method: "PUT",
     headers: headers(),
     body: JSON.stringify({ topic }),
   });
+}
+
+export async function deleteConversation(id: string) {
+  await fetch(`${API_URL}/api/conversations/${id}`, { method: "DELETE", headers: headers() });
+}
+
+export async function globalSearch(q: string): Promise<SearchResult> {
+  const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(q)}&limit=20`, { headers: headers() });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }
-
-export async function deleteConversation(id: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/conversations/${id}`, {
-    method: "DELETE",
-    headers: headers(),
-  });
-  if (!res.ok) throw new Error(`Error ${res.status}`);
-}
-
-// ── Wyszukiwanie globalne ─────────────────────────────────────
-
-export async function globalSearch(
-  q: string,
-  page = 1,
-): Promise<SearchResult> {
-  const params = new URLSearchParams({
-    q,
-    page: String(page),
-    limit: "20",
-  });
-  const res = await fetch(`${API_URL}/api/search?${params}`, {
-    headers: headers(),
-  });
-  if (!res.ok) throw new Error(`Error ${res.status}`);
-  return res.json();
-}
-
-// ── Statystyki ────────────────────────────────────────────────
 
 export async function getStats(): Promise<GlobalStats> {
-  const res = await fetch(`${API_URL}/api/stats`, {
-    headers: headers(),
-  });
+  const res = await fetch(`${API_URL}/api/stats`, { headers: headers() });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }

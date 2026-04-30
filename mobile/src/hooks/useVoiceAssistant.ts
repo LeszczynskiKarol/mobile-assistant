@@ -1,24 +1,32 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
-import { sendVoiceCommand, VoiceResponse, VoiceStats } from "../services/api";
+import {
+  sendVoiceCommand,
+  VoiceResponse,
+  VoiceStats,
+  Source,
+  ModelId,
+} from "../services/api";
 
 let Voice: any = null;
 try {
   Voice = require("@react-native-voice/voice").default;
 } catch (e) {
-  console.warn("Voice module niedostępny (Expo Go) — użyj trybu tekstowego");
+  console.warn("Voice module niedostępny (Expo Go)");
 }
 
-export type VoiceState = "idle" | "listening" | "processing" | "speaking";
+export type VoiceState = "idle" | "listening" | "processing" | "researching" | "speaking";
 
 export interface LogEntry {
   id: string;
-  type: "user" | "assistant" | "action" | "error";
+  type: "user" | "assistant" | "action" | "error" | "research-status";
   text: string;
   timestamp: Date;
   actions?: VoiceResponse["actions"];
   stats?: VoiceStats;
+  sources?: Source[];
+  didResearch?: boolean;
 }
 
 export function useVoiceAssistant() {
@@ -26,26 +34,21 @@ export function useVoiceAssistant() {
   const [transcript, setTranscript] = useState("");
   const [log, setLog] = useState<LogEntry[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [model, setModel] = useState<ModelId>("claude-haiku-4-5");
+  const [researchStatus, setResearchStatus] = useState<string>("");
   const [voiceAvailable] = useState(() => Voice !== null);
   const isMounted = useRef(true);
 
   useEffect(() => {
     if (!Voice) return;
-
-    Voice.onSpeechResults = (e: any) => {
-      setTranscript(e.value?.[0] || "");
-    };
-    Voice.onSpeechPartialResults = (e: any) => {
-      setTranscript(e.value?.[0] || "");
-    };
+    Voice.onSpeechResults = (e: any) => setTranscript(e.value?.[0] || "");
+    Voice.onSpeechPartialResults = (e: any) => setTranscript(e.value?.[0] || "");
     Voice.onSpeechError = (e: any) => {
-      console.error("Speech error:", e.error);
       if (isMounted.current) {
         setState("idle");
         addLog("error", `Błąd mowy: ${e.error?.message || "unknown"}`);
       }
     };
-
     return () => {
       isMounted.current = false;
       Voice.destroy().then(Voice.removeAllListeners);
@@ -53,21 +56,12 @@ export function useVoiceAssistant() {
   }, []);
 
   const addLog = useCallback(
-    (
-      type: LogEntry["type"],
-      text: string,
-      actions?: VoiceResponse["actions"],
-      stats?: VoiceStats,
-    ) => {
-      setLog((prev) => [
-        ...prev,
+    (type: LogEntry["type"], text: string, stats?: VoiceStats, actions?: VoiceResponse["actions"], sources?: Source[], didResearch?: boolean) => {
+      setLog((p) => [
+        ...p,
         {
           id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-          type,
-          text,
-          timestamp: new Date(),
-          actions,
-          stats,
+          type, text, timestamp: new Date(), stats, actions, sources, didResearch,
         },
       ]);
     },
@@ -76,35 +70,29 @@ export function useVoiceAssistant() {
 
   const processText = useCallback(
     async (text: string) => {
-      if (!text.trim()) return;
+      if (!text.trim() || state === "processing" || state === "researching") return;
 
       addLog("user", text);
       setState("processing");
+      setResearchStatus("");
 
       try {
-        // Serwer zarządza historią — wysyłamy tylko conversationId
-        const response = await sendVoiceCommand(
-          text,
-          conversationId || undefined,
-        );
+        const response = await sendVoiceCommand(text, conversationId || undefined, model);
         if (!isMounted.current) return;
 
-        // Zapisz conversationId (nowy lub istniejący)
-        if (response.conversationId) {
-          setConversationId(response.conversationId);
+        if (response.conversationId) setConversationId(response.conversationId);
+
+        // Pokaż status researchu jeśli był
+        if (response.didResearch && response.researchStatus?.length) {
+          // Dodaj podsumowanie researchu jako log entry
+          addLog("research-status", response.researchStatus.join("\n"));
         }
 
-        addLog("assistant", response.response, response.actions, response.stats);
+        addLog("assistant", response.response, response.stats, response.actions, response.sources, response.didResearch);
 
-        for (const action of response.actions || []) {
-          if (action.status === "success") {
-            addLog(
-              "action",
-              `✅ ${action.action}: ${JSON.stringify(action.result).slice(0, 100)}`,
-            );
-          } else if (action.status === "error") {
-            addLog("error", `❌ ${action.action}: ${action.error}`);
-          }
+        for (const a of response.actions || []) {
+          if (a.status === "success") addLog("action", `✅ ${a.action}: ${JSON.stringify(a.result).slice(0, 100)}`);
+          else if (a.status === "error") addLog("error", `❌ ${a.action}: ${a.error}`);
         }
 
         setState("speaking");
@@ -118,33 +106,24 @@ export function useVoiceAssistant() {
           });
         });
 
-        if (isMounted.current) {
-          setState("idle");
-          setTranscript("");
-        }
+        if (isMounted.current) { setState("idle"); setTranscript(""); }
       } catch (err: any) {
-        console.error("Process error:", err);
         addLog("error", `Błąd: ${err.message}`);
         setState("idle");
       }
     },
-    [addLog, conversationId],
+    [addLog, conversationId, model, state],
   );
 
   const startListening = useCallback(async () => {
-    if (!Voice) {
-      addLog("error", "Mikrofon niedostępny w Expo Go ⌨️");
-      return;
-    }
+    if (!Voice) { addLog("error", "Mikrofon niedostępny w Expo Go ⌨️"); return; }
     try {
       Speech.stop();
       setTranscript("");
       setState("listening");
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await Voice.start("pl-PL");
-    } catch {
-      setState("idle");
-    }
+    } catch { setState("idle"); }
   }, [addLog]);
 
   const stopListening = useCallback(async () => {
@@ -153,32 +132,23 @@ export function useVoiceAssistant() {
       await Voice.stop();
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const text = transcript.trim();
-      if (!text) {
-        setState("idle");
-        return;
-      }
+      if (!text) { setState("idle"); return; }
       await processText(text);
-    } catch {
-      setState("idle");
-    }
+    } catch { setState("idle"); }
   }, [transcript, processText]);
 
   const toggle = useCallback(() => {
     if (state === "listening") stopListening();
     else if (state === "idle") startListening();
-    else if (state === "speaking") {
-      Speech.stop();
-      setState("idle");
-    }
+    else if (state === "speaking") { Speech.stop(); setState("idle"); }
   }, [state, startListening, stopListening]);
 
-  // Nowa konwersacja — reset
   const newConversation = useCallback(() => {
     setLog([]);
     setConversationId(null);
+    setResearchStatus("");
   }, []);
 
-  // Załaduj istniejącą konwersację
   const loadConversation = useCallback(
     (id: string, messages: { role: string; content: string; stats?: VoiceStats }[]) => {
       setConversationId(id);
@@ -195,16 +165,8 @@ export function useVoiceAssistant() {
   );
 
   return {
-    state,
-    transcript,
-    log,
-    conversationId,
-    toggle,
-    startListening,
-    stopListening,
-    processText,
-    newConversation,
-    loadConversation,
-    voiceAvailable,
+    state, transcript, log, conversationId, model, researchStatus,
+    setModel, toggle, startListening, stopListening, processText,
+    newConversation, loadConversation, voiceAvailable,
   };
 }
