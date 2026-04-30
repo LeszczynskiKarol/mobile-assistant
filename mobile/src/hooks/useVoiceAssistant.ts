@@ -16,7 +16,22 @@ try {
   console.warn("Voice module niedostępny (Expo Go)");
 }
 
-export type VoiceState = "idle" | "listening" | "processing" | "researching" | "speaking";
+function cleanForTTS(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1") // **bold** → bold
+    .replace(/\*(.+?)\*/g, "$1") // *italic* → italic
+    .replace(/#{1,6}\s/g, "") // ### heading → heading
+    .replace(/\[(\d+)\]/g, "") // [1] [2] → usunięte
+    .replace(/\s{2,}/g, " ") // podwójne spacje
+    .trim();
+}
+
+export type VoiceState =
+  | "idle"
+  | "listening"
+  | "processing"
+  | "researching"
+  | "speaking";
 
 export interface LogEntry {
   id: string;
@@ -42,7 +57,8 @@ export function useVoiceAssistant() {
   useEffect(() => {
     if (!Voice) return;
     Voice.onSpeechResults = (e: any) => setTranscript(e.value?.[0] || "");
-    Voice.onSpeechPartialResults = (e: any) => setTranscript(e.value?.[0] || "");
+    Voice.onSpeechPartialResults = (e: any) =>
+      setTranscript(e.value?.[0] || "");
     Voice.onSpeechError = (e: any) => {
       if (isMounted.current) {
         setState("idle");
@@ -56,12 +72,25 @@ export function useVoiceAssistant() {
   }, []);
 
   const addLog = useCallback(
-    (type: LogEntry["type"], text: string, stats?: VoiceStats, actions?: VoiceResponse["actions"], sources?: Source[], didResearch?: boolean) => {
+    (
+      type: LogEntry["type"],
+      text: string,
+      stats?: VoiceStats,
+      actions?: VoiceResponse["actions"],
+      sources?: Source[],
+      didResearch?: boolean,
+    ) => {
       setLog((p) => [
         ...p,
         {
           id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-          type, text, timestamp: new Date(), stats, actions, sources, didResearch,
+          type,
+          text,
+          timestamp: new Date(),
+          stats,
+          actions,
+          sources,
+          didResearch,
         },
       ]);
     },
@@ -70,14 +99,19 @@ export function useVoiceAssistant() {
 
   const processText = useCallback(
     async (text: string) => {
-      if (!text.trim() || state === "processing" || state === "researching") return;
+      if (!text.trim() || state === "processing" || state === "researching")
+        return;
 
       addLog("user", text);
       setState("processing");
       setResearchStatus("");
 
       try {
-        const response = await sendVoiceCommand(text, conversationId || undefined, model);
+        const response = await sendVoiceCommand(
+          text,
+          conversationId || undefined,
+          model,
+        );
         if (!isMounted.current) return;
 
         if (response.conversationId) setConversationId(response.conversationId);
@@ -88,16 +122,28 @@ export function useVoiceAssistant() {
           addLog("research-status", response.researchStatus.join("\n"));
         }
 
-        addLog("assistant", response.response, response.stats, response.actions, response.sources, response.didResearch);
+        addLog(
+          "assistant",
+          response.response,
+          response.stats,
+          response.actions,
+          response.sources,
+          response.didResearch,
+        );
 
         for (const a of response.actions || []) {
-          if (a.status === "success") addLog("action", `✅ ${a.action}: ${JSON.stringify(a.result).slice(0, 100)}`);
-          else if (a.status === "error") addLog("error", `❌ ${a.action}: ${a.error}`);
+          if (a.status === "success")
+            addLog(
+              "action",
+              `✅ ${a.action}: ${JSON.stringify(a.result).slice(0, 100)}`,
+            );
+          else if (a.status === "error")
+            addLog("error", `❌ ${a.action}: ${a.error}`);
         }
 
         setState("speaking");
         await new Promise<void>((resolve) => {
-          Speech.speak(response.response, {
+          Speech.speak(cleanForTTS(response.response), {
             language: "pl-PL",
             rate: 1.05,
             onDone: resolve,
@@ -106,7 +152,10 @@ export function useVoiceAssistant() {
           });
         });
 
-        if (isMounted.current) { setState("idle"); setTranscript(""); }
+        if (isMounted.current) {
+          setState("idle");
+          setTranscript("");
+        }
       } catch (err: any) {
         addLog("error", `Błąd: ${err.message}`);
         setState("idle");
@@ -116,14 +165,19 @@ export function useVoiceAssistant() {
   );
 
   const startListening = useCallback(async () => {
-    if (!Voice) { addLog("error", "Mikrofon niedostępny w Expo Go ⌨️"); return; }
+    if (!Voice) {
+      addLog("error", "Mikrofon niedostępny w Expo Go ⌨️");
+      return;
+    }
     try {
       Speech.stop();
       setTranscript("");
       setState("listening");
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await Voice.start("pl-PL");
-    } catch { setState("idle"); }
+    } catch {
+      setState("idle");
+    }
   }, [addLog]);
 
   const stopListening = useCallback(async () => {
@@ -132,15 +186,23 @@ export function useVoiceAssistant() {
       await Voice.stop();
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const text = transcript.trim();
-      if (!text) { setState("idle"); return; }
+      if (!text) {
+        setState("idle");
+        return;
+      }
       await processText(text);
-    } catch { setState("idle"); }
+    } catch {
+      setState("idle");
+    }
   }, [transcript, processText]);
 
   const toggle = useCallback(() => {
     if (state === "listening") stopListening();
     else if (state === "idle") startListening();
-    else if (state === "speaking") { Speech.stop(); setState("idle"); }
+    else if (state === "speaking") {
+      Speech.stop();
+      setState("idle");
+    }
   }, [state, startListening, stopListening]);
 
   const newConversation = useCallback(() => {
@@ -150,7 +212,10 @@ export function useVoiceAssistant() {
   }, []);
 
   const loadConversation = useCallback(
-    (id: string, messages: { role: string; content: string; stats?: VoiceStats }[]) => {
+    (
+      id: string,
+      messages: { role: string; content: string; stats?: VoiceStats }[],
+    ) => {
       setConversationId(id);
       const entries: LogEntry[] = messages.map((m, i) => ({
         id: `loaded-${i}-${Date.now().toString(36)}`,
@@ -165,8 +230,19 @@ export function useVoiceAssistant() {
   );
 
   return {
-    state, transcript, log, conversationId, model, researchStatus,
-    setModel, toggle, startListening, stopListening, processText,
-    newConversation, loadConversation, voiceAvailable,
+    state,
+    transcript,
+    log,
+    conversationId,
+    model,
+    researchStatus,
+    setModel,
+    toggle,
+    startListening,
+    stopListening,
+    processText,
+    newConversation,
+    loadConversation,
+    voiceAvailable,
   };
 }

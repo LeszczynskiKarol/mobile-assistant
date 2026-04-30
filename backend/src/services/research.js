@@ -387,6 +387,15 @@ CZAS: ${new Date().toLocaleString("pl-PL", { timeZone: "Europe/Warsaw" })}`,
         .replace(/```\n?/g, "")
         .trim(),
     );
+
+    // Renumeruj źródła na sekwencyjne 1, 2, 3...
+    if (parsed.sources) {
+      parsed.sources = parsed.sources.map((s, i) => ({
+        ...s,
+        index: i + 1,
+      }));
+    }
+
     return { ...parsed, inputTokens, outputTokens };
   } catch {
     console.error(`❌ [ANSWER] Parse error`);
