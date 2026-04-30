@@ -1,4 +1,8 @@
-import { interpretIntent, generateTopic, calculateCost } from "../services/claude.js";
+import {
+  interpretIntent,
+  generateTopic,
+  calculateCost,
+} from "../services/claude.js";
 import { needsResearch, runResearch } from "../services/research.js";
 import { executeAction } from "../services/executor.js";
 import prisma from "../services/db.js";
@@ -29,7 +33,9 @@ export async function voiceRoutes(app) {
       const model = req.body.model || "claude-haiku-4-5";
       const startTime = Date.now();
 
-      console.log(`\n🎤 [VOICE] "${text.slice(0, 100)}" (model: ${model}, stream: ${!!stream})`);
+      console.log(
+        `\n🎤 [VOICE] "${text.slice(0, 100)}" (model: ${model}, stream: ${!!stream})`,
+      );
 
       try {
         // 1. Konwersacja
@@ -37,19 +43,29 @@ export async function voiceRoutes(app) {
         let isNewConversation = false;
 
         if (conversationId) {
-          conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+          conversation = await prisma.conversation.findUnique({
+            where: { id: conversationId },
+          });
           if (!conversation) {
-            return reply.code(404).send({ error: "Konwersacja nie znaleziona" });
+            return reply
+              .code(404)
+              .send({ error: "Konwersacja nie znaleziona" });
           }
         }
         if (!conversation) {
-          conversation = await prisma.conversation.create({ data: { topic: null } });
+          conversation = await prisma.conversation.create({
+            data: { topic: null },
+          });
           isNewConversation = true;
           console.log(`📝 [VOICE] Nowa konwersacja: ${conversation.id}`);
         }
 
         await prisma.message.create({
-          data: { conversationId: conversation.id, role: "user", content: text },
+          data: {
+            conversationId: conversation.id,
+            role: "user",
+            content: text,
+          },
         });
 
         const dbHistory = await prisma.message.findMany({
@@ -71,7 +87,9 @@ export async function voiceRoutes(app) {
             "Content-Type": "application/x-ndjson",
             "Transfer-Encoding": "chunked",
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no", // nginx: nie buforuj
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
           });
 
           const sendEvent = (type, data) => {
@@ -87,9 +105,18 @@ export async function voiceRoutes(app) {
             sendEvent("status", { message: msg });
           };
 
-          const researchResult = await runResearch(text, model, dbHistory, onStatus);
+          const researchResult = await runResearch(
+            text,
+            model,
+            dbHistory,
+            onStatus,
+          );
           const latencyMs = Date.now() - startTime;
-          const costUsd = calculateCost(model, researchResult.inputTokens, researchResult.outputTokens);
+          const costUsd = calculateCost(
+            model,
+            researchResult.inputTokens,
+            researchResult.outputTokens,
+          );
 
           // Zapisz do DB
           const assistantMessage = await prisma.message.create({
@@ -99,11 +126,15 @@ export async function voiceRoutes(app) {
               content: researchResult.response,
               inputTokens: researchResult.inputTokens,
               outputTokens: researchResult.outputTokens,
-              totalTokens: researchResult.inputTokens + researchResult.outputTokens,
+              totalTokens:
+                researchResult.inputTokens + researchResult.outputTokens,
               costUsd,
               model,
               latencyMs,
-              actions: { sources: researchResult.sources, researchStatus: statusLog },
+              actions: {
+                sources: researchResult.sources,
+                researchStatus: statusLog,
+              },
               thinking: researchResult.thinking || null,
             },
           });
@@ -112,7 +143,9 @@ export async function voiceRoutes(app) {
             where: { id: conversation.id },
             data: {
               totalInputTokens: { increment: researchResult.inputTokens || 0 },
-              totalOutputTokens: { increment: researchResult.outputTokens || 0 },
+              totalOutputTokens: {
+                increment: researchResult.outputTokens || 0,
+              },
               totalCostUsd: { increment: costUsd || 0 },
               messageCount: { increment: 2 },
               updatedAt: new Date(),
@@ -122,11 +155,15 @@ export async function voiceRoutes(app) {
           if (isNewConversation) {
             generateTopic(text).then((topic) => {
               console.log(`📌 [TOPIC] "${topic}"`);
-              prisma.conversation.update({ where: { id: conversation.id }, data: { topic } }).catch(() => {});
+              prisma.conversation
+                .update({ where: { id: conversation.id }, data: { topic } })
+                .catch(() => {});
             });
           }
 
-          console.log(`✅ [VOICE] Stream gotowy w ${latencyMs}ms, $${costUsd.toFixed(5)}`);
+          console.log(
+            `✅ [VOICE] Stream gotowy w ${latencyMs}ms, $${costUsd.toFixed(5)}`,
+          );
 
           // Wyślij finalny wynik
           sendEvent("result", {
@@ -143,7 +180,8 @@ export async function voiceRoutes(app) {
             stats: {
               inputTokens: researchResult.inputTokens,
               outputTokens: researchResult.outputTokens,
-              totalTokens: researchResult.inputTokens + researchResult.outputTokens,
+              totalTokens:
+                researchResult.inputTokens + researchResult.outputTokens,
               costUsd,
               model,
               latencyMs,
@@ -163,9 +201,18 @@ export async function voiceRoutes(app) {
           console.log(`🔬 [VOICE] Research (bez streamu)`);
           const statusLog = [];
           const onStatus = (msg) => statusLog.push(msg);
-          const researchResult = await runResearch(text, model, dbHistory, onStatus);
+          const researchResult = await runResearch(
+            text,
+            model,
+            dbHistory,
+            onStatus,
+          );
           const latencyMs = Date.now() - startTime;
-          const costUsd = calculateCost(model, researchResult.inputTokens, researchResult.outputTokens);
+          const costUsd = calculateCost(
+            model,
+            researchResult.inputTokens,
+            researchResult.outputTokens,
+          );
 
           finalResponse = {
             response: researchResult.response,
@@ -174,16 +221,23 @@ export async function voiceRoutes(app) {
             needsInput: false,
             inputTokens: researchResult.inputTokens,
             outputTokens: researchResult.outputTokens,
-            totalTokens: researchResult.inputTokens + researchResult.outputTokens,
-            costUsd, model, latencyMs,
+            totalTokens:
+              researchResult.inputTokens + researchResult.outputTokens,
+            costUsd,
+            model,
+            latencyMs,
           };
           sources = researchResult.sources || [];
           researchStatus = statusLog;
-          console.log(`🔬 [VOICE] Research gotowy: ${sources.length} źródeł, $${costUsd.toFixed(5)}, ${latencyMs}ms`);
+          console.log(
+            `🔬 [VOICE] Research gotowy: ${sources.length} źródeł, $${costUsd.toFixed(5)}, ${latencyMs}ms`,
+          );
         } else {
           console.log(`⚡ [VOICE] Normalny flow`);
           finalResponse = await interpretIntent(text, {
-            context, history: dbHistory.slice(0, -1), model,
+            context,
+            history: dbHistory.slice(0, -1),
+            model,
           });
 
           const executedActions = [];
@@ -194,7 +248,11 @@ export async function voiceRoutes(app) {
               executedActions.push({ ...action, status: "success", result });
               console.log(`✅ [ACTION] ${action.action} → OK`);
             } catch (err) {
-              executedActions.push({ ...action, status: "error", error: err.message });
+              executedActions.push({
+                ...action,
+                status: "error",
+                error: err.message,
+              });
               console.error(`❌ [ACTION] ${action.action} → ${err.message}`);
             }
           }
@@ -213,7 +271,12 @@ export async function voiceRoutes(app) {
             costUsd: finalResponse.costUsd,
             model: finalResponse.model,
             latencyMs: finalResponse.latencyMs,
-            actions: finalResponse.actions?.length > 0 ? finalResponse.actions : (sources.length > 0 ? { sources, researchStatus } : undefined),
+            actions:
+              finalResponse.actions?.length > 0
+                ? finalResponse.actions
+                : sources.length > 0
+                  ? { sources, researchStatus }
+                  : undefined,
             thinking: finalResponse.thinking || null,
             needsInput: finalResponse.needsInput || false,
           },
@@ -233,11 +296,15 @@ export async function voiceRoutes(app) {
         if (isNewConversation) {
           generateTopic(text).then((topic) => {
             console.log(`📌 [TOPIC] "${topic}"`);
-            prisma.conversation.update({ where: { id: conversation.id }, data: { topic } }).catch(() => {});
+            prisma.conversation
+              .update({ where: { id: conversation.id }, data: { topic } })
+              .catch(() => {});
           });
         }
 
-        console.log(`✅ [VOICE] Gotowe w ${Date.now() - startTime}ms, $${(finalResponse.costUsd || 0).toFixed(5)}`);
+        console.log(
+          `✅ [VOICE] Gotowe w ${Date.now() - startTime}ms, $${(finalResponse.costUsd || 0).toFixed(5)}`,
+        );
 
         return {
           response: finalResponse.response,
@@ -264,7 +331,8 @@ export async function voiceRoutes(app) {
         if (reply.raw.writableEnded) return; // stream already closed
         return reply.code(500).send({
           response: "Przepraszam, wystąpił błąd. Spróbuj ponownie.",
-          actions: [], error: err.message,
+          actions: [],
+          error: err.message,
         });
       }
     },
@@ -273,14 +341,26 @@ export async function voiceRoutes(app) {
   app.get("/actions", async () => {
     const { ACTION_REGISTRY } = await import("../services/executor.js");
     return Object.entries(ACTION_REGISTRY).map(([key, val]) => ({
-      action: key, description: val.description, params: val.params,
+      action: key,
+      description: val.description,
+      params: val.params,
     }));
   });
 
   app.get("/models", async () => ({
     models: [
-      { id: "claude-haiku-4-5", name: "Haiku 4.5", description: "Szybki i tani", default: true },
-      { id: "claude-sonnet-4-6", name: "Sonnet 4.6", description: "Inteligentniejszy", default: false },
+      {
+        id: "claude-haiku-4-5",
+        name: "Haiku 4.5",
+        description: "Szybki i tani",
+        default: true,
+      },
+      {
+        id: "claude-sonnet-4-6",
+        name: "Sonnet 4.6",
+        description: "Inteligentniejszy",
+        default: false,
+      },
     ],
   }));
 }

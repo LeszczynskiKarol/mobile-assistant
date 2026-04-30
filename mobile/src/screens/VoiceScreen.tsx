@@ -6,13 +6,13 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar,
-  SafeAreaView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
   Linking,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import {
   useVoiceAssistant,
@@ -407,11 +407,9 @@ export default function VoiceScreen() {
         <Text style={styles.title}>Smart Omni</Text>
         <View style={styles.headerRight}>
           <ModelPicker model={model} onChange={setModel} />
-          {conversationId && (
-            <Pressable onPress={newConversation} style={styles.newBtn}>
-              <Text style={styles.newBtnText}>+</Text>
-            </Pressable>
-          )}
+          <Pressable onPress={newConversation} style={styles.newBtn}>
+            <Text style={styles.newBtnText}>✦ Nowa</Text>
+          </Pressable>
           <Pressable
             onPress={() => router.push("/conversations")}
             style={styles.historyBtn}
@@ -484,8 +482,26 @@ export default function VoiceScreen() {
           ) : null}
         </ScrollView>
 
-        {/* Input row */}
-        <View style={styles.textRow}>
+        {/* Input + voice row */}
+        <View style={styles.inputBar}>
+          <Pressable
+            onPress={toggle}
+            disabled={
+              state === "processing" ||
+              state === "researching" ||
+              !voiceAvailable
+            }
+            style={({ pressed }) => [
+              styles.voiceBtn,
+              { backgroundColor: voiceAvailable ? config.color : "#334155" },
+              { opacity: pressed ? 0.75 : 1 },
+            ]}
+          >
+            <Text style={styles.voiceBtnText}>
+              {voiceAvailable ? config.label : "🎤"}
+            </Text>
+          </Pressable>
+
           <TextInput
             style={styles.textInput}
             value={textInput}
@@ -498,6 +514,7 @@ export default function VoiceScreen() {
             returnKeyType="send"
             editable={state !== "processing" && state !== "researching"}
           />
+
           <Pressable
             style={[
               styles.sendBtn,
@@ -516,38 +533,6 @@ export default function VoiceScreen() {
             <Text style={styles.sendBtnText}>↑</Text>
           </Pressable>
         </View>
-
-        {/* Voice button */}
-        <View style={styles.buttonContainer}>
-          <Pressable
-            onPress={toggle}
-            disabled={
-              state === "processing" ||
-              state === "researching" ||
-              !voiceAvailable
-            }
-            style={({ pressed }) => [
-              styles.voiceButton,
-              { backgroundColor: voiceAvailable ? config.color : "#334155" },
-              { opacity: pressed ? 0.8 : 1 },
-            ]}
-          >
-            <Text style={styles.voiceButtonText}>
-              {voiceAvailable ? config.label : "🎤"}
-            </Text>
-          </Pressable>
-          <Text style={styles.stateLabel}>
-            {!voiceAvailable && "Mikrofon tylko w APK"}
-            {voiceAvailable &&
-              state === "idle" &&
-              `${model === "claude-sonnet-4-6" ? "Sonnet" : "Haiku"} · naciśnij żeby mówić`}
-            {voiceAvailable && state === "listening" && "Słucham..."}
-            {voiceAvailable &&
-              (state === "processing" || state === "researching") &&
-              "Przetwarzam..."}
-            {voiceAvailable && state === "speaking" && "Mówię..."}
-          </Text>
-        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -564,21 +549,33 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop:
+      Platform.OS === "android" ? (StatusBar.currentHeight ?? 24) + 8 : 8,
+
+    paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#1e293b",
   },
   title: { fontSize: 18, fontWeight: "700", color: "#f1f5f9" },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 6 },
   newBtn: {
-    width: 30,
     height: 30,
+    paddingHorizontal: 10,
     borderRadius: 8,
-    backgroundColor: "#1e3a5f",
+    backgroundColor: "#0c2a3f",
+    borderWidth: 1,
+    borderColor: "#0891b2",
     justifyContent: "center",
     alignItems: "center",
+    flexDirection: "row",
+    gap: 4,
   },
-  newBtnText: { color: "#60a5fa", fontSize: 16, fontWeight: "700" },
+  newBtnText: {
+    color: "#06b6d4",
+    fontSize: 13,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
   historyBtn: {
     width: 30,
     height: 30,
@@ -764,22 +761,36 @@ const styles = StyleSheet.create({
   exampleText: { color: "#94a3b8", fontSize: 12 },
 
   // Input
-  textRow: {
+  // Input bar (single row: mic + input + send)
+  inputBar: {
     flexDirection: "row",
-    paddingHorizontal: 16,
+    alignItems: "center",
+    paddingHorizontal: 12,
     paddingVertical: 10,
+    paddingBottom: Platform.OS === "ios" ? 40 : 28,
     borderTopWidth: 1,
     borderTopColor: "#1e293b",
+    gap: 8,
   },
+
+  voiceBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 4,
+    flexShrink: 0,
+  },
+  voiceBtnText: { fontSize: 20 },
   textInput: {
     flex: 1,
     backgroundColor: "#1e293b",
     borderRadius: 20,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     color: "#f1f5f9",
     fontSize: 15,
-    marginRight: 8,
   },
   sendBtn: {
     width: 44,
@@ -788,28 +799,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#0891b2",
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
   },
   sendBtnDisabled: { backgroundColor: "#334155" },
   sendBtnText: { color: "#fff", fontSize: 20, fontWeight: "bold" },
-
-  // Voice button
-  buttonContainer: {
-    alignItems: "center",
-    paddingVertical: 16,
-    paddingBottom: 28,
-    borderTopWidth: 1,
-    borderTopColor: "#1e293b",
-  },
-  voiceButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    justifyContent: "center",
-    alignItems: "center",
-    elevation: 8,
-  },
-  voiceButtonText: { fontSize: 32 },
-  stateLabel: { color: "#94a3b8", fontSize: 12, marginTop: 10 },
 
   // Markdown styles
   mdH1: {

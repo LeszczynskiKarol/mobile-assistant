@@ -66,7 +66,15 @@ export function useVoiceAssistant() {
     };
     return () => {
       isMounted.current = false;
-      Voice.destroy().then(Voice.removeAllListeners);
+      try {
+        Voice.destroy()
+          .then(() => {
+            try {
+              Voice.removeAllListeners();
+            } catch {}
+          })
+          .catch(() => {});
+      } catch {}
     };
   }, []);
 
