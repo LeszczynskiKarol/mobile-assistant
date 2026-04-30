@@ -6,6 +6,13 @@ const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX = process.env.GOOGLE_CX;
 const SCRAPER_URL = process.env.SCRAPER_URL;
 
+// ── Limity ────────────────────────────────────────────────────
+const MAX_CHARS_PER_SOURCE = 10000; // max znaków z jednego źródła
+const MAX_TOTAL_CHARS = 100000; // max łączna treść do Claude
+const MIN_SOURCE_CHARS = 300; // poniżej = śmieć, odrzuć
+const MAX_ROUNDS = 2; // max 2 rundy (3 to za dużo)
+const MAX_SOURCES_FINAL = 8; // max źródeł do finalnej odpowiedzi
+
 // ── Google Custom Search ──
 
 async function googleSearch(query) {
@@ -49,17 +56,24 @@ async function scrapeUrl(url) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(30_000), // 30s timeout per URL (było 120s!)
     });
     if (!res.ok) {
       console.error(`❌ [SCRAPE] ${url} → HTTP ${res.status}`);
       return { url, text: "", error: `Scraper ${res.status}` };
     }
     const data = await res.json();
-    const text = (data.text || "").slice(0, 8000);
-    console.log(
-      `✅ [SCRAPE] ${url} → ${text.length} znaków w ${Date.now() - start}ms`,
-    );
+    const text = (data.text || "").slice(0, MAX_CHARS_PER_SOURCE);
+    const ms = Date.now() - start;
+
+    if (text.length < MIN_SOURCE_CHARS) {
+      console.log(
+        `⚠️ [SCRAPE] ${url} → ${text.length} znaków (za mało, odrzucam) ${ms}ms`,
+      );
+      return { url, text: "", error: "too short" };
+    }
+
+    console.log(`✅ [SCRAPE] ${url} → ${text.length} znaków w ${ms}ms`);
     return { url, text, error: null };
   } catch (err) {
     console.error(
@@ -73,9 +87,9 @@ async function scrapeMultiple(urls) {
   console.log(`📥 [SCRAPE] Scrapuję ${urls.length} URLi równolegle...`);
   const start = Date.now();
   const results = await Promise.all(urls.slice(0, 5).map(scrapeUrl));
-  const ok = results.filter((s) => s.text && s.text.length > 50).length;
+  const ok = results.filter((s) => s.text.length >= MIN_SOURCE_CHARS);
   console.log(
-    `📥 [SCRAPE] Gotowe: ${ok}/${results.length} udanych w ${Date.now() - start}ms`,
+    `📥 [SCRAPE] Gotowe: ${ok.length}/${results.length} udanych w ${Date.now() - start}ms`,
   );
   return results;
 }
@@ -89,13 +103,12 @@ export async function needsResearch(userMessage, model) {
   const res = await client.messages.create({
     model,
     max_tokens: 200,
-    system: `Jesteś klasyfikatorem. Oceń czy zapytanie użytkownika wymaga aktualnych informacji z internetu.
+    system: `Oceń czy zapytanie wymaga aktualnych informacji z internetu.
+Zwróć TYLKO: {"needsResearch": true/false, "reason": "krótko"}
+Bez backticks, bez markdown, TYLKO JSON.
 
-Odpowiedz TYLKO JSON:
-{"needsResearch": true/false, "reason": "krótkie uzasadnienie"}
-
-Potrzebuje researchu: pytania o aktualne wydarzenia, ceny, newsy, konkretne firmy, produkty, technologie, pogodę, statystyki, przepisy prawne, porównania produktów.
-NIE potrzebuje: rozmowa, akcje (Trello/Gmail/Calendar), proste pytania na które znasz odpowiedź, polecenia do wykonania.`,
+TAK: aktualne wydarzenia, ceny, newsy, firmy, produkty, technologie, statystyki, porównania, trendy.
+NIE: rozmowa, akcje (Trello/Gmail/Calendar), proste pytania, polecenia do wykonania.`,
     messages: [{ role: "user", content: userMessage }],
   });
 
@@ -111,7 +124,6 @@ NIE potrzebuje: rozmowa, akcje (Trello/Gmail/Calendar), proste pytania na które
     );
     return parsed;
   } catch {
-    // Fallback: jeśli user wprost prosi o szukanie → true
     const lower = userMessage.toLowerCase();
     const forceResearch =
       lower.includes("przeszukaj") ||
@@ -131,25 +143,21 @@ async function generateSearchQuery(userMessage, model, language = "pl") {
   const res = await client.messages.create({
     model,
     max_tokens: 100,
-    system: `Wygeneruj KRÓTKIE zapytanie do Google Search (2-4 słowa) na podstawie pytania użytkownika.
-Język zapytania: ${language === "en" ? "ANGIELSKI" : "POLSKI"}.
-Zwróć TYLKO JSON: {"query": "zapytanie"}
-Bez backticks, bez markdown.`,
+    system: `Wygeneruj KRÓTKIE zapytanie do Google Search (2-4 słowa).
+Język: ${language === "en" ? "ANGIELSKI" : "POLSKI"}.
+Zwróć TYLKO: {"query": "zapytanie"}
+Bez backticks, bez markdown, TYLKO JSON.`,
     messages: [{ role: "user", content: userMessage }],
   });
 
   const raw = res.content[0]?.text || "";
   try {
-    const parsed = JSON.parse(
+    return JSON.parse(
       raw
         .replace(/```json\n?/g, "")
         .replace(/```\n?/g, "")
         .trim(),
     );
-    console.log(
-      `🔤 [QUERY] Claude wygenerował: "${parsed.query}" (${language})`,
-    );
-    return parsed;
   } catch {
     const fallback = userMessage.split(" ").slice(0, 4).join(" ");
     console.log(`🔤 [QUERY] Parse error, fallback: "${fallback}"`);
@@ -160,20 +168,25 @@ Bez backticks, bez markdown.`,
 // ── Claude: wybierz najlepsze źródła ──
 
 async function selectBestSources(results, userMessage, model) {
-  console.log(
-    `📋 [SELECT] Claude wybiera najlepsze źródła z ${results.length} wyników...`,
-  );
+  console.log(`📋 [SELECT] Claude wybiera z ${results.length} wyników...`);
+
+  // Numerowana lista — prostszy format, mniej parse errors
+  const numbered = results
+    .map((r, i) => `${i + 1}. ${r.title} | ${r.displayLink} | ${r.url}`)
+    .join("\n");
+
   const res = await client.messages.create({
     model,
-    max_tokens: 300,
-    system: `Z listy wyników Google Search wybierz 5 NAJLEPSZYCH źródeł dla zapytania użytkownika.
-Preferuj: oficjalne strony, blogi eksperckie, dokumentacje, artykuły naukowe, renomowane media.
-Unikaj: forów, agregatów SEO, stron z małą ilością treści, Reddit (chyba że wątek jest super trafny).
-Zwróć TYLKO JSON: {"selectedUrls": ["url1", "url2", ...], "reasoning": "krótko dlaczego te"}`,
+    max_tokens: 200,
+    system: `Wybierz 5 NAJLEPSZYCH źródeł z listy wyników wyszukiwania.
+Preferuj: oficjalne strony, dokumentacje, eksperckie blogi, renomowane media.
+Unikaj: Reddit, forów, agregatów SEO, stron ze słabą treścią, Amazona.
+Zwróć TYLKO JSON array z numerami: {"pick": [1, 3, 5, 7, 9]}
+Bez backticks, bez markdown, TYLKO JSON.`,
     messages: [
       {
         role: "user",
-        content: `Pytanie: ${userMessage}\n\nWyniki:\n${results.map((r, i) => `${i + 1}. [${r.displayLink}] ${r.title}\n   ${r.snippet}\n   URL: ${r.url}`).join("\n\n")}`,
+        content: `Pytanie: ${userMessage}\n\nWyniki:\n${numbered}`,
       },
     ],
   });
@@ -186,17 +199,31 @@ Zwróć TYLKO JSON: {"selectedUrls": ["url1", "url2", ...], "reasoning": "krótk
         .replace(/```\n?/g, "")
         .trim(),
     );
-    console.log(
-      `📋 [SELECT] Wybrano ${parsed.selectedUrls.length} źródeł: ${parsed.reasoning}`,
-    );
-    parsed.selectedUrls.forEach((u, i) => console.log(`   ${i + 1}. ${u}`));
-    return parsed;
+    const picks = (parsed.pick || parsed.selectedUrls || []).slice(0, 5);
+
+    // Jeśli numery (1-based)
+    if (typeof picks[0] === "number") {
+      const urls = picks.map((n) => results[n - 1]?.url).filter(Boolean);
+      console.log(`📋 [SELECT] Wybrano ${urls.length} źródeł po numerach`);
+      urls.forEach((u, i) => console.log(`   ${i + 1}. ${u}`));
+      return { selectedUrls: urls };
+    }
+
+    // Jeśli URLe
+    console.log(`📋 [SELECT] Wybrano ${picks.length} źródeł`);
+    return { selectedUrls: picks };
   } catch {
-    console.log(`📋 [SELECT] Parse error, biorę 5 pierwszych`);
-    return {
-      selectedUrls: results.slice(0, 5).map((r) => r.url),
-      reasoning: "fallback",
-    };
+    // Fallback — weź 5 pierwszych ale pomiń Reddit/Amazon
+    const filtered = results
+      .filter(
+        (r) => !r.url.includes("reddit.com") && !r.url.includes("amazon.com"),
+      )
+      .slice(0, 5)
+      .map((r) => r.url);
+    console.log(
+      `📋 [SELECT] Parse error, biorę ${filtered.length} (bez Reddit/Amazon)`,
+    );
+    return { selectedUrls: filtered };
   }
 }
 
@@ -209,41 +236,44 @@ async function evaluateSources(
   searchRound,
   searchLang,
 ) {
-  const successful = scrapedSources.filter((s) => s.text && s.text.length > 50);
+  const successful = scrapedSources.filter(
+    (s) => s.text.length >= MIN_SOURCE_CHARS,
+  );
   console.log(
     `🧠 [EVAL] Runda ${searchRound}: oceniam ${successful.length} źródeł (język: ${searchLang})...`,
   );
 
+  // Jeśli mamy 4+ dobrych źródeł — wystarczające, nie trać czasu
+  if (successful.length >= 4) {
+    console.log(
+      `🧠 [EVAL] → ${successful.length} dobrych źródeł, wystarczające`,
+    );
+    return {
+      sufficient: true,
+      quality: "medium",
+      shouldResearch: false,
+      reasoning: "enough sources",
+    };
+  }
+
   const sourceSummaries = successful
-    .map((s, i) => `Źródło ${i + 1} (${s.url}):\n${s.text.slice(0, 1500)}`)
-    .join("\n\n---\n\n");
+    .map((s, i) => `Źródło ${i + 1} (${s.url}):\n${s.text.slice(0, 800)}`)
+    .join("\n---\n");
 
   const res = await client.messages.create({
     model,
-    max_tokens: 300,
-    system: `Oceń zebrane źródła pod kątem zapytania użytkownika.
-
-Obecna runda: ${searchRound}/3 (max 3 rundy)
-Język wyszukiwania: ${searchLang}
-
-Zdecyduj:
-1. Czy źródła są WYSTARCZAJĄCE do udzielenia dobrej odpowiedzi?
-2. Jeśli NIE — czy warto szukać pod INNYM hasłem lub W INNYM JĘZYKU?
-   - Pamiętaj: źródła angielskie są CZĘSTO LEPSZE dla tematów technicznych, naukowych, biznesowych
-   - Jeśli szukaliśmy po polsku i wyniki słabe → zaproponuj zapytanie po angielsku
-   - Jeśli szukaliśmy po angielsku i wyniki słabe → zaproponuj bardziej precyzyjne hasło
-
+    max_tokens: 200,
+    system: `Oceń źródła. Runda: ${searchRound}/${MAX_ROUNDS}, język: ${searchLang}.
+Czy wystarczające? Jeśli nie i szukaliśmy po polsku → zaproponuj angielskie hasło.
 Zwróć TYLKO JSON:
-{
-  "sufficient": true/false,
-  "quality": "high/medium/low",
-  "shouldResearch": false lub {"query": "nowe hasło", "language": "en/pl"},
-  "reasoning": "dlaczego"
-}`,
+{"sufficient": true/false, "quality": "high/medium/low", "shouldResearch": false, "reasoning": "krótko"}
+lub jeśli trzeba szukać dalej:
+{"sufficient": false, "quality": "low", "shouldResearch": {"query": "new query", "language": "en"}, "reasoning": "krótko"}
+Bez backticks, TYLKO JSON.`,
     messages: [
       {
         role: "user",
-        content: `Pytanie: ${userMessage}\n\nZebrane źródła (${successful.length} udanych):\n\n${sourceSummaries || "(brak treści)"}`,
+        content: `Pytanie: ${userMessage}\n\n${sourceSummaries || "(brak)"}`,
       },
     ],
   });
@@ -279,16 +309,38 @@ Zwróć TYLKO JSON:
 // ── Claude: finalna odpowiedź ──
 
 async function generateResearchAnswer(userMessage, allSources, model, history) {
-  const successful = allSources.filter((s) => s.text && s.text.length > 50);
+  // Deduplikacja po URL
+  const seen = new Set();
+  const unique = allSources.filter((s) => {
+    if (seen.has(s.url)) return false;
+    seen.add(s.url);
+    return s.text.length >= MIN_SOURCE_CHARS;
+  });
+
+  // Ogranicz ilość i łączną długość
+  let totalChars = 0;
+  const limited = [];
+  for (const s of unique) {
+    if (limited.length >= MAX_SOURCES_FINAL) break;
+    if (totalChars + s.text.length > MAX_TOTAL_CHARS) {
+      // Przytnij ostatnie źródło do limitu
+      const remaining = MAX_TOTAL_CHARS - totalChars;
+      if (remaining > MIN_SOURCE_CHARS) {
+        limited.push({ ...s, text: s.text.slice(0, remaining) });
+      }
+      break;
+    }
+    totalChars += s.text.length;
+    limited.push(s);
+  }
+
   console.log(
-    `✍️ [ANSWER] Generuję odpowiedź z ${successful.length} źródeł (model: ${model})...`,
+    `✍️ [ANSWER] ${unique.length} unikalnych → ${limited.length} po limicie (${totalChars} znaków), model: ${model}`,
   );
 
-  const sourceTexts = successful
+  const sourceTexts = limited
     .map((s, i) => `[${i + 1}] ${s.url}\n${s.text}`)
     .join("\n\n===\n\n");
-
-  const sourceList = successful.map((s, i) => `[${i + 1}] ${s.url}`);
 
   const messages = [];
   if (history?.length) {
@@ -299,36 +351,24 @@ async function generateResearchAnswer(userMessage, allSources, model, history) {
 
   messages.push({
     role: "user",
-    content: `${userMessage}\n\n---\nŹRÓDŁA DO WYKORZYSTANIA:\n\n${sourceTexts}`,
+    content: `${userMessage}\n\n---\nŹRÓDŁA:\n\n${sourceTexts}`,
   });
 
   const start = Date.now();
   const res = await client.messages.create({
     model,
     max_tokens: 4096,
-    system: `Jesteś asystentem Karola. Odpowiadasz ZAWSZE po polsku, na podstawie dostarczonych źródeł.
-
-ZASADY:
-- Udziel wyczerpującej, merytorycznej odpowiedzi
-- W tekście umieszczaj PRZYPISY w formacie [1], [2], [3] itd. odnoszące się do numerów źródeł
-- Na końcu dodaj sekcję "---SOURCES---" z listą wykorzystanych źródeł w formacie:
-  [1] Tytuł lub krótki opis | URL
-  [2] Tytuł lub krótki opis | URL
-- Pisz naturalnie, ale opieraj się na faktach ze źródeł
-- Jeśli źródła są sprzeczne, zaznacz to
-- Nie wymyślaj informacji których nie ma w źródłach
-
-AKTUALNY CZAS: ${new Date().toLocaleString("pl-PL", { timeZone: "Europe/Warsaw" })}
-
-FORMAT ODPOWIEDZI (WAŻNE — czysty JSON):
+    system: `Jesteś asystentem. Odpowiadaj po polsku na podstawie źródeł.
+W tekście umieszczaj przypisy [1], [2] itd.
+Zwróć TYLKO JSON:
 {
-  "response": "treść odpowiedzi z przypisami [1], [2]...",
-  "sources": [
-    {"index": 1, "title": "Krótki tytuł", "url": "https://..."},
-    {"index": 2, "title": "Krótki tytuł", "url": "https://..."}
-  ],
-  "thinking": "co zrozumiałem"
-}`,
+  "response": "treść z przypisami [1] [2]...",
+  "sources": [{"index": 1, "title": "Tytuł", "url": "https://..."}],
+  "thinking": "krótko"
+}
+Bez backticks, TYLKO JSON.
+
+CZAS: ${new Date().toLocaleString("pl-PL", { timeZone: "Europe/Warsaw" })}`,
     messages,
   });
 
@@ -337,7 +377,7 @@ FORMAT ODPOWIEDZI (WAŻNE — czysty JSON):
   const raw = res.content[0]?.text || "";
 
   console.log(
-    `✍️ [ANSWER] Gotowe w ${Date.now() - start}ms (${inputTokens} in + ${outputTokens} out tokens)`,
+    `✍️ [ANSWER] Gotowe w ${Date.now() - start}ms (${inputTokens} in + ${outputTokens} out)`,
   );
 
   try {
@@ -349,13 +389,13 @@ FORMAT ODPOWIEDZI (WAŻNE — czysty JSON):
     );
     return { ...parsed, inputTokens, outputTokens };
   } catch {
-    console.error(`❌ [ANSWER] Parse error, zwracam raw text`);
+    console.error(`❌ [ANSWER] Parse error`);
     return {
       response: raw.slice(0, 3000),
-      sources: sourceList.map((s, i) => ({
+      sources: limited.map((s, i) => ({
         index: i + 1,
-        title: s,
-        url: s.split("] ")[1] || s,
+        title: s.url.split("/")[2],
+        url: s.url,
       })),
       thinking: "parse error",
       inputTokens,
@@ -371,26 +411,34 @@ FORMAT ODPOWIEDZI (WAŻNE — czysty JSON):
 export async function runResearch(userMessage, model, history, onStatus) {
   const pipelineStart = Date.now();
   console.log(`\n${"═".repeat(60)}`);
-  console.log(
-    `🔬 [RESEARCH] START pipeline dla: "${userMessage.slice(0, 100)}"`,
-  );
-  console.log(`   Model: ${model}`);
+  console.log(`🔬 [RESEARCH] START: "${userMessage.slice(0, 100)}" (${model})`);
   console.log(`${"═".repeat(60)}`);
 
   const allSources = [];
+  const seenUrls = new Set();
   let searchLang = "pl";
+  let lastQuery = "";
 
-  for (let round = 1; round <= 3; round++) {
-    console.log(`\n── Runda ${round}/3 (${searchLang}) ──`);
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    console.log(`\n── Runda ${round}/${MAX_ROUNDS} (${searchLang}) ──`);
 
     onStatus?.(`🔍 Runda ${round}: generuję zapytanie...`);
     const { query } = await generateSearchQuery(userMessage, model, searchLang);
-    onStatus?.(`🔍 Runda ${round}: szukam "${query}" (${searchLang})...`);
 
+    // Nie szukaj tego samego
+    if (query === lastQuery) {
+      console.log(
+        `⚠️ [RESEARCH] Identyczne zapytanie "${query}", pomijam rundę`,
+      );
+      break;
+    }
+    lastQuery = query;
+
+    onStatus?.(`🔍 Runda ${round}: szukam "${query}" (${searchLang})...`);
     const results = await googleSearch(query);
     if (results.length === 0) {
-      console.log(`⚠️ [RESEARCH] Brak wyników, zmieniam język`);
-      onStatus?.(`⚠️ Runda ${round}: brak wyników dla "${query}"`);
+      console.log(`⚠️ [RESEARCH] Brak wyników`);
+      onStatus?.(`⚠️ Brak wyników dla "${query}"`);
       if (searchLang === "pl") {
         searchLang = "en";
         continue;
@@ -398,24 +446,34 @@ export async function runResearch(userMessage, model, history, onStatus) {
       break;
     }
 
-    onStatus?.(`📋 Runda ${round}: analizuję ${results.length} wyników...`);
+    onStatus?.(`📋 Runda ${round}: wybieram źródła...`);
     const { selectedUrls } = await selectBestSources(
       results,
       userMessage,
       model,
     );
 
-    onStatus?.(`📥 Runda ${round}: scrapuję ${selectedUrls.length} źródeł...`);
-    const scraped = await scrapeMultiple(selectedUrls);
-    const successful = scraped.filter((s) => s.text && s.text.length > 50);
+    // Deduplikacja — nie scrapuj URLi które już mamy
+    const newUrls = selectedUrls.filter((u) => !seenUrls.has(u));
+    newUrls.forEach((u) => seenUrls.add(u));
+
+    if (newUrls.length === 0) {
+      console.log(`⚠️ [RESEARCH] Wszystkie URLe już zescrapowane, kończę`);
+      break;
+    }
+
+    onStatus?.(`📥 Runda ${round}: scrapuję ${newUrls.length} źródeł...`);
+    const scraped = await scrapeMultiple(newUrls);
+    const successful = scraped.filter((s) => s.text.length >= MIN_SOURCE_CHARS);
     allSources.push(...successful);
 
     onStatus?.(
-      `✅ Runda ${round}: zebrano ${successful.length} źródeł (łącznie ${allSources.length})`,
+      `✅ Runda ${round}: ${successful.length} nowych źródeł (łącznie ${allSources.length})`,
     );
 
-    if (round < 3) {
-      onStatus?.(`🧠 Runda ${round}: oceniam jakość źródeł...`);
+    // Oceń czy potrzebna kolejna runda
+    if (round < MAX_ROUNDS) {
+      onStatus?.(`🧠 Oceniam źródła...`);
       const evaluation = await evaluateSources(
         scraped,
         userMessage,
@@ -425,23 +483,19 @@ export async function runResearch(userMessage, model, history, onStatus) {
       );
 
       if (evaluation.sufficient || !evaluation.shouldResearch) {
-        console.log(`✅ [RESEARCH] Źródła wystarczające po rundzie ${round}`);
-        onStatus?.(`✅ Źródła wystarczające (jakość: ${evaluation.quality})`);
+        console.log(`✅ [RESEARCH] Wystarczające po rundzie ${round}`);
         break;
       }
 
-      const nextSearch = evaluation.shouldResearch;
-      searchLang = nextSearch.language || "en";
-      onStatus?.(
-        `🔄 Potrzebuję lepszych źródeł → szukam: "${nextSearch.query}" (${searchLang})`,
-      );
-      userMessage = `${userMessage}\n\n[Uwaga: szukaj pod hasłem: "${nextSearch.query}"]`;
+      const next = evaluation.shouldResearch;
+      searchLang = next.language || "en";
+      onStatus?.(`🔄 Szukam dalej: "${next.query}" (${searchLang})`);
+      userMessage = `${userMessage}\n\n[Szukaj: "${next.query}"]`;
     }
   }
 
-  onStatus?.(
-    `✍️ Generuję odpowiedź na podstawie ${allSources.length} źródeł...`,
-  );
+  // Finalna odpowiedź
+  onStatus?.(`✍️ Generuję odpowiedź z ${allSources.length} źródeł...`);
   const answer = await generateResearchAnswer(
     userMessage,
     allSources,
@@ -449,12 +503,10 @@ export async function runResearch(userMessage, model, history, onStatus) {
     history,
   );
 
+  const totalMs = Date.now() - pipelineStart;
   console.log(`\n${"═".repeat(60)}`);
   console.log(
-    `🔬 [RESEARCH] KONIEC pipeline w ${Date.now() - pipelineStart}ms`,
-  );
-  console.log(
-    `   Źródeł: ${allSources.length}, Odpowiedź: ${answer.response?.length || 0} znaków`,
+    `🔬 [RESEARCH] KONIEC w ${totalMs}ms | ${allSources.length} źródeł | ${answer.response?.length || 0} znaków`,
   );
   console.log(`${"═".repeat(60)}\n`);
 
