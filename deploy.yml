@@ -1,0 +1,85 @@
+name: Deploy Voice Assistant
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get runner IP
+        id: ip
+        run: |
+          PUBLIC_IP=$(curl -s --retry 3 --retry-delay 2 https://api.ipify.org)
+          if [[ ! "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Failed to get valid public IP: '$PUBLIC_IP'"
+            exit 1
+          fi
+          echo "ipv4=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
+          echo "Runner IP: $PUBLIC_IP"
+
+      - name: Open SSH
+        run: |
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.VOICE_SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr ${{ steps.ip.outputs.ipv4 }}/32
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VOICE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.VOICE_SSH_KEY }}
+          command_timeout: 120s
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+            echo "=== node: $(which node) ($(node --version)) ==="
+
+            cd /var/www/mobile-assistant
+
+            echo "=== Git pull ==="
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "=== Backend dependencies ==="
+            cd /var/www/mobile-assistant/backend
+            npm ci --omit=dev
+
+            echo "=== Prisma generate ==="
+            npx prisma generate
+
+            echo "=== Restart PM2 ==="
+            pm2 restart voice-assistant || pm2 start src/server.js --name voice-assistant
+            pm2 save
+
+            sleep 2
+            echo "=== Status ==="
+            pm2 list
+            echo "=== Last 5 logs ==="
+            pm2 logs voice-assistant --lines 5 --nostream
+
+      - name: Close SSH
+        if: always()
+        run: |
+          IP="${{ steps.ip.outputs.ipv4 }}"
+          if [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            aws ec2 revoke-security-group-ingress \
+              --group-id ${{ secrets.VOICE_SG_ID }} \
+              --protocol tcp --port 22 \
+              --cidr ${IP}/32 || true
+          else
+            echo "No valid IP to revoke, skipping"
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1

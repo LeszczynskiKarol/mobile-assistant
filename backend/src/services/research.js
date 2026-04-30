@@ -6,55 +6,74 @@ const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX = process.env.GOOGLE_CX;
 const SCRAPER_URL = process.env.SCRAPER_URL;
 
-// ── Google Custom Search ──────────────────────────────────────
+// ── Google Custom Search ──
 
 async function googleSearch(query) {
+  console.log(`🔍 [SEARCH] Google query: "${query}"`);
   const url = new URL("https://www.googleapis.com/customsearch/v1");
   url.searchParams.set("key", GOOGLE_API_KEY);
   url.searchParams.set("cx", GOOGLE_CX);
   url.searchParams.set("q", query);
   url.searchParams.set("num", "10");
 
+  const start = Date.now();
   const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`Google Search ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`❌ [SEARCH] Google API error ${res.status}: ${err}`);
+    throw new Error(`Google Search ${res.status}: ${err}`);
+  }
   const data = await res.json();
-
-  return (data.items || []).map((item) => ({
+  const results = (data.items || []).map((item) => ({
     title: item.title,
     url: item.link,
     snippet: item.snippet || "",
     displayLink: item.displayLink,
   }));
+  console.log(`✅ [SEARCH] ${results.length} wyników w ${Date.now() - start}ms`);
+  results.forEach((r, i) => console.log(`   ${i + 1}. [${r.displayLink}] ${r.title.slice(0, 60)}`));
+  return results;
 }
 
-// ── Scraper ───────────────────────────────────────────────────
+// ── Scraper ──
 
 async function scrapeUrl(url) {
+  console.log(`📥 [SCRAPE] Start: ${url}`);
+  const start = Date.now();
   try {
     const res = await fetch(`${SCRAPER_URL}/scrape`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
-      signal: AbortSignal.timeout(120_000), // 2 min timeout
+      signal: AbortSignal.timeout(120_000),
     });
-    if (!res.ok) return { url, text: "", error: `Scraper ${res.status}` };
+    if (!res.ok) {
+      console.error(`❌ [SCRAPE] ${url} → HTTP ${res.status}`);
+      return { url, text: "", error: `Scraper ${res.status}` };
+    }
     const data = await res.json();
-    // Limit do ~8000 znaków per źródło (żeby nie przekroczyć context window)
     const text = (data.text || "").slice(0, 8000);
+    console.log(`✅ [SCRAPE] ${url} → ${text.length} znaków w ${Date.now() - start}ms`);
     return { url, text, error: null };
   } catch (err) {
+    console.error(`❌ [SCRAPE] ${url} → ${err.message} (${Date.now() - start}ms)`);
     return { url, text: "", error: err.message };
   }
 }
 
 async function scrapeMultiple(urls) {
-  // Scrapuj równolegle (max 5)
-  return Promise.all(urls.slice(0, 5).map(scrapeUrl));
+  console.log(`📥 [SCRAPE] Scrapuję ${urls.length} URLi równolegle...`);
+  const start = Date.now();
+  const results = await Promise.all(urls.slice(0, 5).map(scrapeUrl));
+  const ok = results.filter((s) => s.text && s.text.length > 50).length;
+  console.log(`📥 [SCRAPE] Gotowe: ${ok}/${results.length} udanych w ${Date.now() - start}ms`);
+  return results;
 }
 
-// ── Claude: czy potrzebny research? ───────────────────────────
+// ── Claude: czy potrzebny research? ──
 
 export async function needsResearch(userMessage, model) {
+  console.log(`🧠 [CLASSIFY] Sprawdzam czy "${userMessage.slice(0, 80)}" wymaga researchu...`);
   const res = await client.messages.create({
     model,
     max_tokens: 200,
@@ -71,13 +90,16 @@ NIE potrzebuje: rozmowa, akcje (Trello/Gmail/Calendar), proste pytania na które
   const raw = res.content[0]?.text || "";
   try {
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    console.log(`🧠 [CLASSIFY] → needsResearch: ${parsed.needsResearch} (${parsed.reason})`);
+    return parsed;
   } catch {
+    console.log(`🧠 [CLASSIFY] → parse error, domyślnie false`);
     return { needsResearch: false, reason: "parse error" };
   }
 }
 
-// ── Claude: generuj zapytanie do Google ───────────────────────
+// ── Claude: generuj zapytanie do Google ──
 
 async function generateSearchQuery(userMessage, model, language = "pl") {
   const res = await client.messages.create({
@@ -92,16 +114,20 @@ Bez backticks, bez markdown.`,
 
   const raw = res.content[0]?.text || "";
   try {
-    return JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    const parsed = JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    console.log(`🔤 [QUERY] Claude wygenerował: "${parsed.query}" (${language})`);
+    return parsed;
   } catch {
-    // Fallback — użyj pierwszych 4 słów pytania
-    return { query: userMessage.split(" ").slice(0, 4).join(" ") };
+    const fallback = userMessage.split(" ").slice(0, 4).join(" ");
+    console.log(`🔤 [QUERY] Parse error, fallback: "${fallback}"`);
+    return { query: fallback };
   }
 }
 
-// ── Claude: wybierz najlepsze źródła ──────────────────────────
+// ── Claude: wybierz najlepsze źródła ──
 
 async function selectBestSources(results, userMessage, model) {
+  console.log(`📋 [SELECT] Claude wybiera najlepsze źródła z ${results.length} wyników...`);
   const res = await client.messages.create({
     model,
     max_tokens: 300,
@@ -117,18 +143,23 @@ Zwróć TYLKO JSON: {"selectedUrls": ["url1", "url2", ...], "reasoning": "krótk
 
   const raw = res.content[0]?.text || "";
   try {
-    return JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    const parsed = JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    console.log(`📋 [SELECT] Wybrano ${parsed.selectedUrls.length} źródeł: ${parsed.reasoning}`);
+    parsed.selectedUrls.forEach((u, i) => console.log(`   ${i + 1}. ${u}`));
+    return parsed;
   } catch {
-    // Fallback — weź 5 pierwszych
+    console.log(`📋 [SELECT] Parse error, biorę 5 pierwszych`);
     return { selectedUrls: results.slice(0, 5).map((r) => r.url), reasoning: "fallback" };
   }
 }
 
-// ── Claude: oceń jakość źródeł i zdecyduj o re-search ────────
+// ── Claude: oceń jakość źródeł ──
 
 async function evaluateSources(scrapedSources, userMessage, model, searchRound, searchLang) {
-  const sourceSummaries = scrapedSources
-    .filter((s) => s.text && s.text.length > 50)
+  const successful = scrapedSources.filter((s) => s.text && s.text.length > 50);
+  console.log(`🧠 [EVAL] Runda ${searchRound}: oceniam ${successful.length} źródeł (język: ${searchLang})...`);
+
+  const sourceSummaries = successful
     .map((s, i) => `Źródło ${i + 1} (${s.url}):\n${s.text.slice(0, 1500)}`)
     .join("\n\n---\n\n");
 
@@ -156,29 +187,35 @@ Zwróć TYLKO JSON:
 }`,
     messages: [{
       role: "user",
-      content: `Pytanie: ${userMessage}\n\nZebrane źródła (${scrapedSources.filter(s => s.text).length} udanych):\n\n${sourceSummaries || "(brak treści)"}`,
+      content: `Pytanie: ${userMessage}\n\nZebrane źródła (${successful.length} udanych):\n\n${sourceSummaries || "(brak treści)"}`,
     }],
   });
 
   const raw = res.content[0]?.text || "";
   try {
-    return JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    const parsed = JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    console.log(`🧠 [EVAL] → sufficient: ${parsed.sufficient}, quality: ${parsed.quality}`);
+    if (parsed.shouldResearch) {
+      console.log(`🧠 [EVAL] → kolejna runda: "${parsed.shouldResearch.query}" (${parsed.shouldResearch.language})`);
+    }
+    return parsed;
   } catch {
+    console.log(`🧠 [EVAL] Parse error, zakładam sufficient`);
     return { sufficient: true, quality: "medium", shouldResearch: false, reasoning: "parse error" };
   }
 }
 
-// ── Claude: final answer z źródłami ──────────────────────────
+// ── Claude: finalna odpowiedź ──
 
 async function generateResearchAnswer(userMessage, allSources, model, history) {
-  const sourceTexts = allSources
-    .filter((s) => s.text && s.text.length > 50)
+  const successful = allSources.filter((s) => s.text && s.text.length > 50);
+  console.log(`✍️ [ANSWER] Generuję odpowiedź z ${successful.length} źródeł (model: ${model})...`);
+
+  const sourceTexts = successful
     .map((s, i) => `[${i + 1}] ${s.url}\n${s.text}`)
     .join("\n\n===\n\n");
 
-  const sourceList = allSources
-    .filter((s) => s.text && s.text.length > 50)
-    .map((s, i) => `[${i + 1}] ${s.url}`);
+  const sourceList = successful.map((s, i) => `[${i + 1}] ${s.url}`);
 
   const messages = [];
   if (history?.length) {
@@ -192,6 +229,7 @@ async function generateResearchAnswer(userMessage, allSources, model, history) {
     content: `${userMessage}\n\n---\nŹRÓDŁA DO WYKORZYSTANIA:\n\n${sourceTexts}`,
   });
 
+  const start = Date.now();
   const res = await client.messages.create({
     model,
     max_tokens: 4096,
@@ -225,10 +263,13 @@ FORMAT ODPOWIEDZI (WAŻNE — czysty JSON):
   const outputTokens = res.usage?.output_tokens || 0;
   const raw = res.content[0]?.text || "";
 
+  console.log(`✍️ [ANSWER] Gotowe w ${Date.now() - start}ms (${inputTokens} in + ${outputTokens} out tokens)`);
+
   try {
     const parsed = JSON.parse(raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
     return { ...parsed, inputTokens, outputTokens };
   } catch {
+    console.error(`❌ [ANSWER] Parse error, zwracam raw text`);
     return {
       response: raw.slice(0, 3000),
       sources: sourceList.map((s, i) => ({ index: i + 1, title: s, url: s.split("] ")[1] || s })),
@@ -243,38 +284,34 @@ FORMAT ODPOWIEDZI (WAŻNE — czysty JSON):
 // 🔍 Main research pipeline
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/**
- * Pełny pipeline researchu. Zwraca obiekt z postępem (callbacks).
- * onStatus(msg) — wywoływany na każdym etapie (do wyświetlenia spinnera)
- */
 export async function runResearch(userMessage, model, history, onStatus) {
+  const pipelineStart = Date.now();
+  console.log(`\n${"═".repeat(60)}`);
+  console.log(`🔬 [RESEARCH] START pipeline dla: "${userMessage.slice(0, 100)}"`);
+  console.log(`   Model: ${model}`);
+  console.log(`${"═".repeat(60)}`);
+
   const allSources = [];
   let searchLang = "pl";
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
 
   for (let round = 1; round <= 3; round++) {
-    // 1. Generuj zapytanie
+    console.log(`\n── Runda ${round}/3 (${searchLang}) ──`);
+
     onStatus?.(`🔍 Runda ${round}: generuję zapytanie...`);
     const { query } = await generateSearchQuery(userMessage, model, searchLang);
     onStatus?.(`🔍 Runda ${round}: szukam "${query}" (${searchLang})...`);
 
-    // 2. Google Search
     const results = await googleSearch(query);
     if (results.length === 0) {
+      console.log(`⚠️ [RESEARCH] Brak wyników, zmieniam język`);
       onStatus?.(`⚠️ Runda ${round}: brak wyników dla "${query}"`);
-      if (searchLang === "pl") {
-        searchLang = "en";
-        continue;
-      }
+      if (searchLang === "pl") { searchLang = "en"; continue; }
       break;
     }
 
-    // 3. Claude wybiera 5 najlepszych
     onStatus?.(`📋 Runda ${round}: analizuję ${results.length} wyników...`);
     const { selectedUrls } = await selectBestSources(results, userMessage, model);
 
-    // 4. Scrapuj wybrane
     onStatus?.(`📥 Runda ${round}: scrapuję ${selectedUrls.length} źródeł...`);
     const scraped = await scrapeMultiple(selectedUrls);
     const successful = scraped.filter((s) => s.text && s.text.length > 50);
@@ -282,29 +319,30 @@ export async function runResearch(userMessage, model, history, onStatus) {
 
     onStatus?.(`✅ Runda ${round}: zebrano ${successful.length} źródeł (łącznie ${allSources.length})`);
 
-    // 5. Oceń jakość i zdecyduj o kolejnej rundzie
     if (round < 3) {
       onStatus?.(`🧠 Runda ${round}: oceniam jakość źródeł...`);
       const evaluation = await evaluateSources(scraped, userMessage, model, round, searchLang);
 
       if (evaluation.sufficient || !evaluation.shouldResearch) {
+        console.log(`✅ [RESEARCH] Źródła wystarczające po rundzie ${round}`);
         onStatus?.(`✅ Źródła wystarczające (jakość: ${evaluation.quality})`);
         break;
       }
 
-      // Re-search z nowym hasłem/językiem
       const nextSearch = evaluation.shouldResearch;
       searchLang = nextSearch.language || "en";
       onStatus?.(`🔄 Potrzebuję lepszych źródeł → szukam: "${nextSearch.query}" (${searchLang})`);
-
-      // Override dla następnej rundy
       userMessage = `${userMessage}\n\n[Uwaga: szukaj pod hasłem: "${nextSearch.query}"]`;
     }
   }
 
-  // 6. Generuj finalną odpowiedź
   onStatus?.(`✍️ Generuję odpowiedź na podstawie ${allSources.length} źródeł...`);
   const answer = await generateResearchAnswer(userMessage, allSources, model, history);
+
+  console.log(`\n${"═".repeat(60)}`);
+  console.log(`🔬 [RESEARCH] KONIEC pipeline w ${Date.now() - pipelineStart}ms`);
+  console.log(`   Źródeł: ${allSources.length}, Odpowiedź: ${answer.response?.length || 0} znaków`);
+  console.log(`${"═".repeat(60)}\n`);
 
   return {
     response: answer.response,

@@ -7,8 +7,6 @@ const ALLOWED_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6"];
 
 /** @param {import('fastify').FastifyInstance} app */
 export async function voiceRoutes(app) {
-  // ── POST /api/voice ─────────────────────────────────────────
-  // Body: { text, conversationId?, model?, context? }
   app.post(
     "/voice",
     {
@@ -30,15 +28,14 @@ export async function voiceRoutes(app) {
       const model = req.body.model || "claude-haiku-4-5";
       const startTime = Date.now();
 
+      console.log(`\n🎤 [VOICE] "${text.slice(0, 100)}" (model: ${model})`);
+
       try {
-        // 1. Konwersacja
         let conversation;
         let isNewConversation = false;
 
         if (conversationId) {
-          conversation = await prisma.conversation.findUnique({
-            where: { id: conversationId },
-          });
+          conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
           if (!conversation) {
             return reply.code(404).send({ error: "Konwersacja nie znaleziona" });
           }
@@ -47,14 +44,13 @@ export async function voiceRoutes(app) {
         if (!conversation) {
           conversation = await prisma.conversation.create({ data: { topic: null } });
           isNewConversation = true;
+          console.log(`📝 [VOICE] Nowa konwersacja: ${conversation.id}`);
         }
 
-        // 2. Zapisz wiadomość usera
         await prisma.message.create({
           data: { conversationId: conversation.id, role: "user", content: text },
         });
 
-        // 3. Historia z DB
         const dbHistory = await prisma.message.findMany({
           where: { conversationId: conversation.id },
           orderBy: { createdAt: "asc" },
@@ -62,7 +58,7 @@ export async function voiceRoutes(app) {
           select: { role: true, content: true },
         });
 
-        // 4. Sprawdź czy potrzebny research
+        // Sprawdź research
         const researchCheck = await needsResearch(text, model);
 
         let finalResponse;
@@ -70,18 +66,13 @@ export async function voiceRoutes(app) {
         let researchStatus = [];
 
         if (researchCheck.needsResearch) {
-          // ── RESEARCH PIPELINE ──
+          console.log(`🔬 [VOICE] Research potrzebny — startuję pipeline`);
           const statusLog = [];
           const onStatus = (msg) => statusLog.push(msg);
 
           const researchResult = await runResearch(text, model, dbHistory, onStatus);
-
           const latencyMs = Date.now() - startTime;
-          const costUsd = calculateCost(
-            model,
-            researchResult.inputTokens,
-            researchResult.outputTokens,
-          );
+          const costUsd = calculateCost(model, researchResult.inputTokens, researchResult.outputTokens);
 
           finalResponse = {
             response: researchResult.response,
@@ -91,35 +82,37 @@ export async function voiceRoutes(app) {
             inputTokens: researchResult.inputTokens,
             outputTokens: researchResult.outputTokens,
             totalTokens: researchResult.inputTokens + researchResult.outputTokens,
-            costUsd,
-            model,
-            latencyMs,
+            costUsd, model, latencyMs,
           };
 
           sources = researchResult.sources || [];
           researchStatus = statusLog;
+
+          console.log(`🔬 [VOICE] Research gotowy: ${sources.length} źródeł, $${costUsd.toFixed(5)}, ${latencyMs}ms`);
         } else {
-          // ── NORMALNY FLOW (bez researchu) ──
+          console.log(`⚡ [VOICE] Bez researchu — normalny flow`);
           finalResponse = await interpretIntent(text, {
             context,
             history: dbHistory.slice(0, -1),
             model,
           });
 
-          // Wykonaj akcje
           const executedActions = [];
           for (const action of finalResponse.actions) {
+            console.log(`🔧 [ACTION] Wykonuję: ${action.action}(${JSON.stringify(action.params).slice(0, 100)})`);
             try {
               const result = await executeAction(action);
               executedActions.push({ ...action, status: "success", result });
+              console.log(`✅ [ACTION] ${action.action} → OK`);
             } catch (err) {
               executedActions.push({ ...action, status: "error", error: err.message });
+              console.error(`❌ [ACTION] ${action.action} → ${err.message}`);
             }
           }
           finalResponse.actions = executedActions;
         }
 
-        // 5. Zapisz odpowiedź do DB
+        // Zapisz do DB
         const assistantMessage = await prisma.message.create({
           data: {
             conversationId: conversation.id,
@@ -137,7 +130,6 @@ export async function voiceRoutes(app) {
           },
         });
 
-        // 6. Aktualizuj statystyki konwersacji
         await prisma.conversation.update({
           where: { id: conversation.id },
           data: {
@@ -149,14 +141,16 @@ export async function voiceRoutes(app) {
           },
         });
 
-        // 7. Temat w tle
         if (isNewConversation) {
           generateTopic(text).then((topic) => {
+            console.log(`📌 [TOPIC] "${topic}"`);
             prisma.conversation.update({ where: { id: conversation.id }, data: { topic } }).catch(() => {});
           });
         }
 
-        // 8. Odpowiedź
+        const totalMs = Date.now() - startTime;
+        console.log(`✅ [VOICE] Gotowe w ${totalMs}ms, $${(finalResponse.costUsd || 0).toFixed(5)}`);
+
         return {
           response: finalResponse.response,
           actions: finalResponse.actions || [],
@@ -165,8 +159,8 @@ export async function voiceRoutes(app) {
           conversationId: conversation.id,
           messageId: assistantMessage.id,
           isNewConversation,
-          sources,          // ← NOWE: lista źródeł z przypisami
-          researchStatus,   // ← NOWE: log postępu researchu
+          sources,
+          researchStatus,
           didResearch: researchCheck.needsResearch,
           stats: {
             inputTokens: finalResponse.inputTokens,
@@ -178,7 +172,7 @@ export async function voiceRoutes(app) {
           },
         };
       } catch (err) {
-        req.log.error(err);
+        console.error(`❌ [VOICE] Error: ${err.message}`);
         return reply.code(500).send({
           response: "Przepraszam, wystąpił błąd. Spróbuj ponownie.",
           actions: [],
@@ -188,23 +182,17 @@ export async function voiceRoutes(app) {
     },
   );
 
-  // ── GET /api/actions ──
   app.get("/actions", async () => {
     const { ACTION_REGISTRY } = await import("../services/executor.js");
     return Object.entries(ACTION_REGISTRY).map(([key, val]) => ({
-      action: key,
-      description: val.description,
-      params: val.params,
+      action: key, description: val.description, params: val.params,
     }));
   });
 
-  // ── GET /api/models ── lista dostępnych modeli
-  app.get("/models", async () => {
-    return {
-      models: [
-        { id: "claude-haiku-4-5", name: "Haiku 4.5", description: "Szybki i tani", default: true },
-        { id: "claude-sonnet-4-6", name: "Sonnet 4.6", description: "Inteligentniejszy, droższy", default: false },
-      ],
-    };
-  });
+  app.get("/models", async () => ({
+    models: [
+      { id: "claude-haiku-4-5", name: "Haiku 4.5", description: "Szybki i tani", default: true },
+      { id: "claude-sonnet-4-6", name: "Sonnet 4.6", description: "Inteligentniejszy, droższy", default: false },
+    ],
+  }));
 }
