@@ -164,7 +164,6 @@ export function useVoiceAssistant() {
           else if (a.status === "error")
             addLog("error", `❌ ${a.action}: ${a.error}`);
         }
-
         setState("speaking");
         setLiveStatus("");
         await new Promise<void>((resolve) => {
