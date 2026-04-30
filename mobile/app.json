@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "VoiceAssistant",
+    "slug": "voice-assistant",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "voice-assistant",
+    "platforms": ["android"],
+    "android": {
+      "package": "pl.torweb.voiceassistant",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      },
+      "permissions": [
+        "RECORD_AUDIO",
+        "INTERNET"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "VoiceAssistant potrzebuje mikrofonu do rozpoznawania mowy",
+          "speechRecognitionPermission": "VoiceAssistant potrzebuje rozpoznawania mowy"
+        }
+      ]
+    ]
+  }
+}
