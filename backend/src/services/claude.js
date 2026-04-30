@@ -47,6 +47,8 @@ ZASADY:
 - Pole "thinking" to krótkie wyjaśnienie co zrozumiałeś (do debugowania)
 - Jeśli brakuje informacji do wykonania akcji, zapytaj w "response" i ustaw "needsInput": true
 - Daty relatywne (jutro, za godzinę, w piątek) rozwiązuj względem TERAZ
+- NIGDY nie używaj list numerowanych (1. 2. 3.) ani punktorów (- •) w "response"
+- Pisz WYŁĄCZNIE ciągłą prozą w akapitach — odpowiedź będzie czytana na głos przez TTS
 
 AKTUALNY CZAS: {{CURRENT_TIME}}
 

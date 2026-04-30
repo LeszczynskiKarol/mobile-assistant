@@ -365,6 +365,7 @@ async function generateResearchAnswer(userMessage, allSources, model, history) {
     max_tokens: 4096,
     system: `Jesteś asystentem. Odpowiadaj po polsku na podstawie źródeł.
 W tekście umieszczaj przypisy [1], [2] itd.
+WAŻNE: Pisz WYŁĄCZNIE ciągłą prozą w akapitach. NIGDY nie używaj list numerowanych (1. 2. 3.), punktorów (- •) ani wypunktowań. Odpowiedź będzie czytana na głos — listy są niedopuszczalne.
 Zwróć TYLKO JSON:
 {
   "response": "treść z przypisami [1] [2]...",
