@@ -2,8 +2,21 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic(); // uses ANTHROPIC_API_KEY from env
 
-// System prompt — definiuje dostępne akcje jako tekst, nie jako tool_use schema
-// To jest DUŻO tańsze niż tool_use bo nie dodaje ~1000 tokenów definicji tools
+// Cennik Claude Haiku 4.5 (USD per 1M tokens)
+const PRICING = {
+  "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
+  "claude-haiku-4-5": { input: 1.0, output: 5.0 },
+  "claude-sonnet-4-20250514": { input: 3.0, output: 15.0 },
+};
+
+function calculateCost(model, inputTokens, outputTokens) {
+  const prices = PRICING[model] || PRICING["claude-haiku-4-5"];
+  return (
+    (inputTokens / 1_000_000) * prices.input +
+    (outputTokens / 1_000_000) * prices.output
+  );
+}
+
 const SYSTEM_PROMPT = `Jesteś głosowym asystentem Karola. Interpretujesz polecenia głosowe i zwracasz JSON z akcjami do wykonania.
 
 DOSTĘPNE AKCJE:
@@ -57,10 +70,11 @@ FORMAT ODPOWIEDZI:
 }`;
 
 /**
- * Interpretuje tekst z voice i zwraca structured JSON z akcjami
+ * Interpretuje tekst z voice i zwraca structured JSON z akcjami + statystyki tokenów
  */
 export async function interpretIntent(text, opts = {}) {
   const { context, history } = opts;
+  const startTime = Date.now();
 
   const now = new Date().toLocaleString("pl-PL", {
     timeZone: "Europe/Warsaw",
@@ -74,8 +88,7 @@ export async function interpretIntent(text, opts = {}) {
   const messages = [];
 
   if (history?.length) {
-    for (const msg of history.slice(-10)) {
-      // max 10 ostatnich wiadomości
+    for (const msg of history.slice(-20)) {
       messages.push({ role: msg.role, content: msg.content });
     }
   }
@@ -86,17 +99,32 @@ export async function interpretIntent(text, opts = {}) {
   }
   messages.push({ role: "user", content: userContent });
 
+  const model = "claude-haiku-4-5";
+
   const response = await client.messages.create({
-    model: "claude-haiku-4-5", // sonnet = tani i szybki, wystarczy do intent detection
+    model,
     max_tokens: 1024,
     system: systemPrompt,
     messages,
   });
 
+  const latencyMs = Date.now() - startTime;
   const raw = response.content[0]?.text || "";
+  const inputTokens = response.usage?.input_tokens || 0;
+  const outputTokens = response.usage?.output_tokens || 0;
+  const costUsd = calculateCost(model, inputTokens, outputTokens);
+
+  // Statystyki wspólne dla obu ścieżek
+  const stats = {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    costUsd,
+    model,
+    latencyMs,
+  };
 
   try {
-    // Parsuj JSON — Claude powinien zwracać czysty JSON
     const cleaned = raw
       .replace(/```json\n?/g, "")
       .replace(/```\n?/g, "")
@@ -108,14 +136,34 @@ export async function interpretIntent(text, opts = {}) {
       actions: parsed.actions || [],
       thinking: parsed.thinking || "",
       needsInput: parsed.needsInput || false,
+      ...stats,
     };
   } catch (parseErr) {
-    // Fallback — Claude zwrócił tekst zamiast JSON
     return {
       response: raw.slice(0, 500),
       actions: [],
       thinking: "Parse error — Claude nie zwrócił JSON",
       needsInput: false,
+      ...stats,
     };
+  }
+}
+
+/**
+ * Generuje krótki temat konwersacji na podstawie pierwszego promptu.
+ * Zwraca string 3-6 słów po polsku.
+ */
+export async function generateTopic(firstUserMessage) {
+  try {
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 60,
+      system:
+        "Wygeneruj ULTRA krótki temat konwersacji (3-6 słów, po polsku) na podstawie pierwszej wiadomości użytkownika. Zwróć TYLKO temat, nic więcej. Bez cudzysłowów, bez kropki na końcu.",
+      messages: [{ role: "user", content: firstUserMessage }],
+    });
+    return (response.content[0]?.text || "Nowa konwersacja").trim();
+  } catch {
+    return "Nowa konwersacja";
   }
 }

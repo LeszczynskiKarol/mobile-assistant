@@ -1,13 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
-import {
-  sendVoiceCommand,
-  VoiceResponse,
-  HistoryMessage,
-} from "../services/api";
+import { sendVoiceCommand, VoiceResponse, VoiceStats } from "../services/api";
 
-// Bezpieczny import — w Expo Go Voice nie istnieje
 let Voice: any = null;
 try {
   Voice = require("@react-native-voice/voice").default;
@@ -23,35 +18,31 @@ export interface LogEntry {
   text: string;
   timestamp: Date;
   actions?: VoiceResponse["actions"];
+  stats?: VoiceStats;
 }
 
 export function useVoiceAssistant() {
   const [state, setState] = useState<VoiceState>("idle");
   const [transcript, setTranscript] = useState("");
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [voiceAvailable] = useState(() => Voice !== null);
-  const historyRef = useRef<HistoryMessage[]>([]);
   const isMounted = useRef(true);
 
   useEffect(() => {
     if (!Voice) return;
 
     Voice.onSpeechResults = (e: any) => {
-      const text = e.value?.[0] || "";
-      setTranscript(text);
+      setTranscript(e.value?.[0] || "");
     };
     Voice.onSpeechPartialResults = (e: any) => {
-      const text = e.value?.[0] || "";
-      setTranscript(text);
+      setTranscript(e.value?.[0] || "");
     };
     Voice.onSpeechError = (e: any) => {
       console.error("Speech error:", e.error);
       if (isMounted.current) {
         setState("idle");
-        addLog(
-          "error",
-          `Błąd rozpoznawania mowy: ${e.error?.message || "unknown"}`,
-        );
+        addLog("error", `Błąd mowy: ${e.error?.message || "unknown"}`);
       }
     };
 
@@ -66,6 +57,7 @@ export function useVoiceAssistant() {
       type: LogEntry["type"],
       text: string,
       actions?: VoiceResponse["actions"],
+      stats?: VoiceStats,
     ) => {
       setLog((prev) => [
         ...prev,
@@ -75,34 +67,34 @@ export function useVoiceAssistant() {
           text,
           timestamp: new Date(),
           actions,
+          stats,
         },
       ]);
     },
     [],
   );
 
-  // Przetwarza tekst (używane i przez głos i przez klawiaturę)
   const processText = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
 
       addLog("user", text);
-      historyRef.current.push({ role: "user", content: text });
-
       setState("processing");
 
       try {
+        // Serwer zarządza historią — wysyłamy tylko conversationId
         const response = await sendVoiceCommand(
           text,
-          historyRef.current.slice(-10),
+          conversationId || undefined,
         );
         if (!isMounted.current) return;
 
-        addLog("assistant", response.response, response.actions);
-        historyRef.current.push({
-          role: "assistant",
-          content: response.response,
-        });
+        // Zapisz conversationId (nowy lub istniejący)
+        if (response.conversationId) {
+          setConversationId(response.conversationId);
+        }
+
+        addLog("assistant", response.response, response.actions, response.stats);
 
         for (const action of response.actions || []) {
           if (action.status === "success") {
@@ -136,15 +128,12 @@ export function useVoiceAssistant() {
         setState("idle");
       }
     },
-    [addLog],
+    [addLog, conversationId],
   );
 
   const startListening = useCallback(async () => {
     if (!Voice) {
-      addLog(
-        "error",
-        "Mikrofon niedostępny w Expo Go — użyj pola tekstowego ⌨️",
-      );
+      addLog("error", "Mikrofon niedostępny w Expo Go ⌨️");
       return;
     }
     try {
@@ -153,8 +142,7 @@ export function useVoiceAssistant() {
       setState("listening");
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await Voice.start("pl-PL");
-    } catch (err) {
-      console.error("Start listening error:", err);
+    } catch {
       setState("idle");
     }
   }, [addLog]);
@@ -170,7 +158,7 @@ export function useVoiceAssistant() {
         return;
       }
       await processText(text);
-    } catch (err) {
+    } catch {
       setState("idle");
     }
   }, [transcript, processText]);
@@ -184,20 +172,39 @@ export function useVoiceAssistant() {
     }
   }, [state, startListening, stopListening]);
 
-  const clearHistory = useCallback(() => {
+  // Nowa konwersacja — reset
+  const newConversation = useCallback(() => {
     setLog([]);
-    historyRef.current = [];
+    setConversationId(null);
   }, []);
+
+  // Załaduj istniejącą konwersację
+  const loadConversation = useCallback(
+    (id: string, messages: { role: string; content: string; stats?: VoiceStats }[]) => {
+      setConversationId(id);
+      const entries: LogEntry[] = messages.map((m, i) => ({
+        id: `loaded-${i}-${Date.now().toString(36)}`,
+        type: m.role as "user" | "assistant",
+        text: m.content,
+        timestamp: new Date(),
+        stats: m.stats,
+      }));
+      setLog(entries);
+    },
+    [],
+  );
 
   return {
     state,
     transcript,
     log,
+    conversationId,
     toggle,
     startListening,
     stopListening,
-    processText, // ← eksportujemy do użycia z klawiatury
-    clearHistory,
-    voiceAvailable, // ← informuje UI czy mikrofon działa
+    processText,
+    newConversation,
+    loadConversation,
+    voiceAvailable,
   };
 }

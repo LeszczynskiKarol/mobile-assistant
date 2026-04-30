@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -11,11 +11,13 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import {
   useVoiceAssistant,
   VoiceState,
   LogEntry,
 } from "../hooks/useVoiceAssistant";
+import { getConversation } from "../services/api";
 
 const STATE_CONFIG: Record<VoiceState, { label: string; color: string }> = {
   idle: { label: "🎤", color: "#1e293b" },
@@ -25,6 +27,7 @@ const STATE_CONFIG: Record<VoiceState, { label: string; color: string }> = {
 };
 
 function LogItem({ entry }: { entry: LogEntry }) {
+  const [showStats, setShowStats] = useState(false);
   const colors: Record<string, string> = {
     user: "#60a5fa",
     assistant: "#f1f5f9",
@@ -37,36 +40,85 @@ function LogItem({ entry }: { entry: LogEntry }) {
     action: "",
     error: "",
   };
+
   return (
-    <View style={[styles.logItem, { borderLeftColor: colors[entry.type] }]}>
+    <Pressable
+      style={[styles.logItem, { borderLeftColor: colors[entry.type] }]}
+      onPress={() => entry.stats && setShowStats(!showStats)}
+    >
       <Text style={styles.logText}>
         {prefixes[entry.type]}
         {entry.text}
       </Text>
+
+      {/* Statystyki per-wiadomość (tap to toggle) */}
+      {showStats && entry.stats && (
+        <View style={styles.statsDetail}>
+          <Text style={styles.statsDetailText}>
+            {entry.stats.inputTokens} in + {entry.stats.outputTokens} out ={" "}
+            {entry.stats.totalTokens} tok
+          </Text>
+          <Text style={styles.statsDetailText}>
+            ${entry.stats.costUsd.toFixed(5)} · {entry.stats.latencyMs}ms ·{" "}
+            {entry.stats.model}
+          </Text>
+        </View>
+      )}
+
       <Text style={styles.logTime}>
         {entry.timestamp.toLocaleTimeString("pl-PL", {
           hour: "2-digit",
           minute: "2-digit",
           second: "2-digit",
         })}
+        {entry.stats && ` · $${entry.stats.costUsd.toFixed(5)}`}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
 export default function VoiceScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ conversationId?: string }>();
   const {
     state,
     transcript,
     log,
+    conversationId,
     toggle,
-    clearHistory,
+    newConversation,
+    loadConversation,
     processText,
     voiceAvailable,
   } = useVoiceAssistant();
   const scrollRef = useRef<ScrollView>(null);
   const config = STATE_CONFIG[state];
   const [textInput, setTextInput] = useState("");
+
+  // Załaduj istniejącą konwersację z parametrów
+  useEffect(() => {
+    if (params.conversationId) {
+      getConversation(params.conversationId).then((data) => {
+        loadConversation(
+          data.id,
+          data.messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            stats: m.inputTokens != null
+              ? {
+                  inputTokens: m.inputTokens!,
+                  outputTokens: m.outputTokens!,
+                  totalTokens: m.totalTokens!,
+                  costUsd: m.costUsd!,
+                  model: m.model!,
+                  latencyMs: m.latencyMs!,
+                }
+              : undefined,
+          })),
+        );
+      });
+    }
+  }, [params.conversationId]);
 
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
@@ -83,14 +135,22 @@ export default function VoiceScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
 
+      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Voice Assistant</Text>
-        {!voiceAvailable && (
-          <Text style={styles.devBadge}>Expo Go — tryb tekstowy</Text>
-        )}
-        <Pressable onPress={clearHistory} style={styles.clearBtn}>
-          <Text style={styles.clearText}>Wyczyść</Text>
-        </Pressable>
+        <View style={styles.headerRight}>
+          {conversationId && (
+            <Pressable onPress={newConversation} style={styles.newBtn}>
+              <Text style={styles.newBtnText}>+ Nowa</Text>
+            </Pressable>
+          )}
+          <Pressable
+            onPress={() => router.push("/conversations")}
+            style={styles.historyBtn}
+          >
+            <Text style={styles.historyBtnText}>📋</Text>
+          </Pressable>
+        </View>
       </View>
 
       <KeyboardAvoidingView
@@ -106,7 +166,7 @@ export default function VoiceScreen() {
             <Text style={styles.emptyText}>
               {voiceAvailable
                 ? "Naciśnij przycisk i powiedz co mam zrobić."
-                : "Expo Go nie obsługuje mikrofonu.\nWpisz komendę w pole poniżej."}
+                : "Wpisz komendę w pole poniżej."}
               {"\n\nPrzykłady:\n"}
               {'• "Utwórz kartę w Trello: naprawić bug"\n'}
               {'• "Wyślij maila do Jana z podsumowaniem"\n'}
@@ -125,7 +185,7 @@ export default function VoiceScreen() {
           </View>
         ) : null}
 
-        {/* Pole tekstowe — zawsze widoczne w Expo Go */}
+        {/* Text input */}
         <View style={styles.textRow}>
           <TextInput
             style={styles.textInput}
@@ -150,7 +210,7 @@ export default function VoiceScreen() {
           </Pressable>
         </View>
 
-        {/* Przycisk mikrofonu */}
+        {/* Voice button */}
         <View style={styles.buttonContainer}>
           <Pressable
             onPress={toggle}
@@ -184,27 +244,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: "#1e293b",
   },
   title: { fontSize: 20, fontWeight: "700", color: "#f1f5f9" },
-  devBadge: {
-    fontSize: 10,
-    color: "#f59e0b",
-    backgroundColor: "#422006",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  newBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#1e3a5f",
   },
-  clearBtn: {
-    paddingHorizontal: 12,
+  newBtnText: { color: "#60a5fa", fontSize: 13, fontWeight: "600" },
+  historyBtn: {
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
     backgroundColor: "#1e293b",
   },
-  clearText: { color: "#94a3b8", fontSize: 13 },
+  historyBtnText: { fontSize: 18 },
   logContainer: { flex: 1 },
   logContent: { padding: 16, paddingBottom: 24 },
   emptyText: {
@@ -222,6 +282,13 @@ const styles = StyleSheet.create({
   },
   logText: { color: "#e2e8f0", fontSize: 15, lineHeight: 22 },
   logTime: { color: "#475569", fontSize: 11, marginTop: 4 },
+  statsDetail: {
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#334155",
+  },
+  statsDetailText: { color: "#64748b", fontSize: 11, marginBottom: 2 },
   transcriptBar: {
     backgroundColor: "#1e293b",
     paddingHorizontal: 20,
