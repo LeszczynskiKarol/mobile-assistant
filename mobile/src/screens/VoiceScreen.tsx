@@ -90,59 +90,122 @@ function ResponseText({
   sources?: Source[];
   onSourcePress?: (source: Source) => void;
 }) {
-  if (!sources?.length) {
-    return <Text style={styles.logText}>{text}</Text>;
-  }
+  // Parse markdown + footnotes into styled segments
+  const segments: React.ReactNode[] = [];
+  const lines = text.split("\n");
 
-  // Parse [1], [2], [3] etc. into tappable elements
-  const parts: {
-    type: "text" | "footnote";
-    content: string;
-    index?: number;
-  }[] = [];
-  const regex = /\[(\d+)\]/g;
+  lines.forEach((line, lineIdx) => {
+    if (lineIdx > 0) segments.push(<Text key={`br-${lineIdx}`}>{"\n"}</Text>);
+
+    // Headings
+    const h2 = line.match(/^##\s+(.+)/);
+    const h1 = !h2 && line.match(/^#\s+(.+)/);
+
+    if (h1) {
+      segments.push(
+        <Text key={`h1-${lineIdx}`} style={styles.mdH1}>
+          {parseInline(h1[1], sources, onSourcePress, `h1-${lineIdx}`)}
+        </Text>,
+      );
+      return;
+    }
+    if (h2) {
+      segments.push(
+        <Text key={`h2-${lineIdx}`} style={styles.mdH2}>
+          {parseInline(h2[1], sources, onSourcePress, `h2-${lineIdx}`)}
+        </Text>,
+      );
+      return;
+    }
+
+    // Bullet points
+    const bullet = line.match(/^[-•]\s+(.+)/);
+    if (bullet) {
+      segments.push(
+        <Text key={`li-${lineIdx}`} style={styles.mdLi}>
+          {"  • "}
+          {parseInline(bullet[1], sources, onSourcePress, `li-${lineIdx}`)}
+        </Text>,
+      );
+      return;
+    }
+
+    // Regular line
+    segments.push(
+      <Text key={`p-${lineIdx}`} style={styles.logText}>
+        {parseInline(line, sources, onSourcePress, `p-${lineIdx}`)}
+      </Text>,
+    );
+  });
+
+  return <Text style={styles.logText}>{segments}</Text>;
+}
+
+// Parse inline: **bold**, *italic*, [1] footnotes
+function parseInline(
+  text: string,
+  sources?: Source[],
+  onSourcePress?: (s: Source) => void,
+  keyPrefix = "",
+): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  // Match **bold**, *italic*, [N] footnotes
+  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|\[(\d+)\])/g;
   let lastIdx = 0;
   let match;
+  let i = 0;
 
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIdx) {
-      parts.push({ type: "text", content: text.slice(lastIdx, match.index) });
+      parts.push(
+        <Text key={`${keyPrefix}-t${i++}`}>
+          {text.slice(lastIdx, match.index)}
+        </Text>,
+      );
     }
-    parts.push({
-      type: "footnote",
-      content: match[0],
-      index: parseInt(match[1]),
-    });
+
+    if (match[2]) {
+      // **bold**
+      parts.push(
+        <Text key={`${keyPrefix}-b${i++}`} style={styles.mdBold}>
+          {match[2]}
+        </Text>,
+      );
+    } else if (match[3]) {
+      // *italic*
+      parts.push(
+        <Text key={`${keyPrefix}-i${i++}`} style={styles.mdItalic}>
+          {match[3]}
+        </Text>,
+      );
+    } else if (match[4]) {
+      // [N] footnote
+      const idx = parseInt(match[4]);
+      const source = sources?.find((s) => s.index === idx);
+      parts.push(
+        <Text
+          key={`${keyPrefix}-fn${i++}`}
+          style={styles.footnote}
+          onPress={() =>
+            source &&
+            (onSourcePress
+              ? onSourcePress(source)
+              : Linking.openURL(source.url))
+          }
+        >
+          [{match[4]}]
+        </Text>,
+      );
+    }
+
     lastIdx = match.index + match[0].length;
   }
+
   if (lastIdx < text.length) {
-    parts.push({ type: "text", content: text.slice(lastIdx) });
+    parts.push(<Text key={`${keyPrefix}-end`}>{text.slice(lastIdx)}</Text>);
   }
 
-  return (
-    <Text style={styles.logText}>
-      {parts.map((p, i) => {
-        if (p.type === "footnote") {
-          const source = sources.find((s) => s.index === p.index);
-          return (
-            <Text
-              key={i}
-              style={styles.footnote}
-              onPress={() =>
-                source &&
-                (onSourcePress
-                  ? onSourcePress(source)
-                  : Linking.openURL(source.url))
-              }
-            >
-              {p.content}
-            </Text>
-          );
-        }
-        return <Text key={i}>{p.content}</Text>;
-      })}
-    </Text>
-  );
+  return parts;
 }
 
 // ── Log Item ──────────────────────────────────────────────────
@@ -747,4 +810,21 @@ const styles = StyleSheet.create({
   },
   voiceButtonText: { fontSize: 32 },
   stateLabel: { color: "#94a3b8", fontSize: 12, marginTop: 10 },
+
+  // Markdown styles
+  mdH1: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#f1f5f9",
+    marginVertical: 4,
+  },
+  mdH2: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#e2e8f0",
+    marginVertical: 3,
+  },
+  mdBold: { fontWeight: "700", color: "#f1f5f9" },
+  mdItalic: { fontStyle: "italic", color: "#cbd5e1" },
+  mdLi: { color: "#e2e8f0", fontSize: 15, lineHeight: 23, paddingLeft: 4 },
 });

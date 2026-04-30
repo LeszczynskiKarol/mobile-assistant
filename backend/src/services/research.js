@@ -83,10 +83,15 @@ async function scrapeUrl(url) {
   }
 }
 
-async function scrapeMultiple(urls) {
+async function scrapeMultiple(urls, onStatus) {
   console.log(`📥 [SCRAPE] Scrapuję ${urls.length} URLi równolegle...`);
   const start = Date.now();
-  const results = await Promise.all(urls.slice(0, 5).map(scrapeUrl));
+  const results = await Promise.all(
+    urls.slice(0, 5).map((url) => {
+      onStatus?.(`📥 Scrapuję: ${url.split("/")[2]}`);
+      return scrapeUrl(url);
+    }),
+  );
   const ok = results.filter((s) => s.text.length >= MIN_SOURCE_CHARS);
   console.log(
     `📥 [SCRAPE] Gotowe: ${ok.length}/${results.length} udanych w ${Date.now() - start}ms`,
@@ -472,7 +477,7 @@ export async function runResearch(userMessage, model, history, onStatus) {
     }
 
     onStatus?.(`📥 Runda ${round}: scrapuję ${newUrls.length} źródeł...`);
-    const scraped = await scrapeMultiple(newUrls);
+    const scraped = await scrapeMultiple(newUrls, onStatus);
     const successful = scraped.filter((s) => s.text.length >= MIN_SOURCE_CHARS);
     allSources.push(...successful);
 
