@@ -2,6 +2,29 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
+function fixCodeBlocks(text) {
+  // Jeśli już ma poprawne code fences — nie ruszaj
+  if (text.includes("```")) return text;
+
+  // Szukaj wzorca: "nazwa_języka\n" po którym jest kod (wcięty lub z keywords)
+  const langPatterns =
+    /\b(python|javascript|typescript|bash|sql|html|css|json|yaml|sh|jsx|tsx|nginx|prisma)\n([\s\S]*?)(?=\n\n[A-ZĄĆĘŁŃÓŚŹŻ]|\n\n$|$)/gi;
+
+  return text.replace(langPatterns, (match, lang, code) => {
+    // Sprawdź czy to rzeczywiście kod (ma wcięcia, keywords, itp.)
+    const lines = code.trim().split("\n");
+    const looksLikeCode = lines.some(
+      (l) =>
+        /^\s{2,}/.test(l) ||
+        /^(def |class |import |from |const |let |var |function |if |for |while |return |print|console\.)/.test(
+          l.trim(),
+        ),
+    );
+    if (!looksLikeCode || lines.length < 2) return match;
+    return "```" + lang.toLowerCase() + "\n" + code.trimEnd() + "\n```";
+  });
+}
+
 const PRICING = {
   "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
   "claude-haiku-4-5": { input: 1.0, output: 5.0 },
@@ -17,7 +40,7 @@ export function calculateCost(model, inputTokens, outputTokens) {
   );
 }
 
-const SYSTEM_PROMPT = `Jesteś głosowym asystentem Karola. Interpretujesz polecenia głosowe i zwracasz JSON z akcjami do wykonania.
+const SYSTEM_PROMPT = `Jesteś wszechstronnym asystentem AI. Pomagasz we WSZYSTKIM: pisaniu kodu, odpowiadaniu na pytania, analizie, tworzeniu treści, a także zarządzaniu zadaniami przez akcje (Trello, Gmail, Calendar). Jeśli pytanie wymaga akcji — zwróć je w tablicy actions. Jeśli pytanie to rozmowa, kod, analiza — odpowiedz merytorycznie w polu response, z pustą tablicą actions.
 
 DOSTĘPNE AKCJE:
 1. trello_create_card — tworzenie karty w Trello
@@ -40,15 +63,21 @@ DOSTĘPNE AKCJE:
 
 ZASADY:
 - Odpowiadaj ZAWSZE po polsku
-- Zwracaj TYLKO valid JSON, bez markdown, bez backticks
+- Zwracaj TYLKO valid JSON, bez markdown wokół JSON, bez backticks otaczających JSON
 - Jeśli polecenie wymaga wielu akcji, zwróć tablicę actions
 - Jeśli polecenie to pytanie lub rozmowa, zwróć pustą tablicę actions
-- Pole "response" to tekst który zostanie odczytany na głos — pisz naturalnie, krótko
 - Pole "thinking" to krótkie wyjaśnienie co zrozumiałeś (do debugowania)
 - Jeśli brakuje informacji do wykonania akcji, zapytaj w "response" i ustaw "needsInput": true
 - Daty relatywne (jutro, za godzinę, w piątek) rozwiązuj względem TERAZ
-- NIGDY nie używaj list numerowanych (1. 2. 3.) ani punktorów (- •) w "response"
-- Pisz WYŁĄCZNIE ciągłą prozą w akapitach — odpowiedź będzie czytana na głos przez TTS
+
+FORMATOWANIE ODPOWIEDZI W POLU "response":
+- Dla ROZMOWY i WYJAŚNIEŃ: pisz ciągłą prozą w akapitach, bez list numerowanych, bez punktorów
+- Dla KODU: otaczaj bloki kodu markerami [CODE:język] i [/CODE]. Przykład:
+  "response": "Oto skrypt:\n\n[CODE:python]\ndef hello():\n    print('Hello')\n\nhello()\n[/CODE]\n\nUruchom komendą [INLINE]python hello.py[/INLINE]."
+- NIGDY nie używaj potrójnych backticków w response — ZAWSZE [CODE:język]...[/CODE]
+- Dla inline kodu: [INLINE]nazwaZmiennej[/INLINE]
+- Każdy kod MUSI być w [CODE:język]...[/CODE], nigdy luźno
+- Możesz MIESZAĆ prozę z blokami kodu
 
 AKTUALNY CZAS: {{CURRENT_TIME}}
 
@@ -62,9 +91,15 @@ FORMAT ODPOWIEDZI:
   "needsInput": false
 }`;
 
+const MODEL_LIMITS = {
+  "claude-haiku-4-5": 8192,
+  "claude-sonnet-4-6": 16384,
+};
+
 export async function interpretIntent(text, opts = {}) {
   const { context, history, model = "claude-haiku-4-5" } = opts;
   const startTime = Date.now();
+  const maxTokens = MODEL_LIMITS[model] || 64000;
 
   const now = new Date().toLocaleString("pl-PL", {
     timeZone: "Europe/Warsaw",
@@ -87,28 +122,73 @@ export async function interpretIntent(text, opts = {}) {
   }
   messages.push({ role: "user", content: userContent });
 
-  const response = await client.messages.create({
+  // Pierwsza odpowiedź
+  let response = await client.messages.create({
     model,
-    max_tokens: 1024,
+    max_tokens: maxTokens,
     system: systemPrompt,
     messages,
   });
 
+  let raw = response.content[0]?.text || "";
+  let totalInput = response.usage?.input_tokens || 0;
+  let totalOutput = response.usage?.output_tokens || 0;
+
+  // Auto-kontynuacja jeśli Claude nie skończył
+  let retries = 0;
+  while (response.stop_reason === "max_tokens" && retries < 3) {
+    retries++;
+    console.log(
+      `🔄 [CLAUDE] Kontynuacja #${retries} (stop_reason: max_tokens, dotychczas ${raw.length} znaków)`,
+    );
+
+    const contMessages = [
+      ...messages,
+      { role: "assistant", content: raw },
+      {
+        role: "user",
+        content:
+          "Kontynuuj dokładnie od miejsca w którym przerwałeś. Nie powtarzaj tego co już napisałeś. Nie dodawaj żadnego wstępu. Kontynuuj od następnego znaku.",
+      },
+    ];
+
+    response = await client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: contMessages,
+    });
+
+    const continuation = response.content[0]?.text || "";
+    raw += continuation;
+    totalInput += response.usage?.input_tokens || 0;
+    totalOutput += response.usage?.output_tokens || 0;
+
+    console.log(
+      `🔄 [CLAUDE] Kontynuacja #${retries}: +${continuation.length} znaków (łącznie ${raw.length})`,
+    );
+  }
+
   const latencyMs = Date.now() - startTime;
-  const raw = response.content[0]?.text || "";
-  const inputTokens = response.usage?.input_tokens || 0;
-  const outputTokens = response.usage?.output_tokens || 0;
-  const costUsd = calculateCost(model, inputTokens, outputTokens);
+  const costUsd = calculateCost(model, totalInput, totalOutput);
 
   const stats = {
-    inputTokens,
-    outputTokens,
-    totalTokens: inputTokens + outputTokens,
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
+    totalTokens: totalInput + totalOutput,
     costUsd,
     model,
     latencyMs,
   };
 
+  const result = parseClaudeResponse(raw);
+  return { ...result, ...stats };
+}
+
+function parseClaudeResponse(raw) {
+  console.log("📦 [RAW CLAUDE]:", raw.slice(0, 500));
+
+  // Próba 1: normalny JSON parse
   try {
     const cleaned = raw
       .replace(/```json\n?/g, "")
@@ -116,21 +196,79 @@ export async function interpretIntent(text, opts = {}) {
       .trim();
     const parsed = JSON.parse(cleaned);
     return {
-      response: parsed.response || "Nie zrozumiałem polecenia.",
+      response: convertCodeMarkers(parsed.response || ""),
       actions: parsed.actions || [],
       thinking: parsed.thinking || "",
       needsInput: parsed.needsInput || false,
-      ...stats,
     };
-  } catch {
-    return {
-      response: raw.slice(0, 500),
-      actions: [],
-      thinking: "Parse error — Claude nie zwrócił JSON",
-      needsInput: false,
-      ...stats,
-    };
+  } catch {}
+
+  // Próba 2: JSON złamany przez backticki — wyciągnij pola regexem
+  const thinkingMatch = raw.match(/"thinking"\s*:\s*"([^"]*)"/);
+  const needsInputMatch = raw.match(/"needsInput"\s*:\s*(true|false)/);
+
+  // Wyciągnij response — wszystko między "response": " a ostatniego ", przed "actions"/"thinking"/"needsInput"/}
+  const responseStart = raw.indexOf('"response"');
+  if (responseStart !== -1) {
+    // Znajdź początek wartości
+    const valStart = raw.indexOf('"', responseStart + 10) + 1;
+    if (valStart > 0) {
+      // Szukaj końca — ostatnie " przed "actions" lub "thinking" lub "needsInput" lub końcem
+      let valEnd = -1;
+      for (const marker of ['"actions"', '"thinking"', '"needsInput"']) {
+        const idx = raw.indexOf(marker, valStart);
+        if (idx !== -1) {
+          // Cofnij do ostatniego " przed markerem
+          const sub = raw.substring(valStart, idx);
+          const lastQuote = sub.lastIndexOf('"');
+          if (
+            lastQuote !== -1 &&
+            (valEnd === -1 || valStart + lastQuote < valEnd)
+          ) {
+            valEnd = valStart + lastQuote;
+          }
+        }
+      }
+      if (valEnd === -1) {
+        // Fallback — ostatnie " w raw
+        valEnd = raw.lastIndexOf('"');
+      }
+
+      if (valEnd > valStart) {
+        let text = raw.substring(valStart, valEnd);
+        text = text
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, "\\");
+
+        return {
+          response: convertCodeMarkers(text),
+          actions: [],
+          thinking: thinkingMatch ? thinkingMatch[1] : "",
+          needsInput: needsInputMatch ? needsInputMatch[1] === "true" : false,
+        };
+      }
+    }
   }
+
+  // Próba 3: cały raw jako response
+  return {
+    response: convertCodeMarkers(raw),
+    actions: [],
+    thinking: "Fallback parser",
+    needsInput: false,
+  };
+}
+
+function convertCodeMarkers(text) {
+  if (!text) return text;
+  // [CODE:python]...[/CODE] → ```python\n...\n```
+  text = text.replace(/\[CODE:(\w+)\]\n?/g, "```$1\n");
+  text = text.replace(/\n?\[\/CODE\]/g, "\n```");
+  // [INLINE]...[/INLINE] → `...`
+  text = text.replace(/\[INLINE\](.*?)\[\/INLINE\]/g, "`$1`");
+  return text;
 }
 
 export async function generateTopic(firstUserMessage) {

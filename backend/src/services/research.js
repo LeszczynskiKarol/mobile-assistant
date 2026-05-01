@@ -360,9 +360,12 @@ async function generateResearchAnswer(userMessage, allSources, model, history) {
   });
 
   const start = Date.now();
-  const res = await client.messages.create({
+  const maxTokens = 8192;
+
+  let response = await client.messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: maxTokens,
+
     system: `Jesteś asystentem. Odpowiadaj po polsku na podstawie źródeł.
 W tekście umieszczaj przypisy [1], [2] itd.
 WAŻNE: Pisz WYŁĄCZNIE ciągłą prozą w akapitach. NIGDY nie używaj list numerowanych (1. 2. 3.), punktorów (- •) ani wypunktowań. Odpowiedź będzie czytana na głos — listy są niedopuszczalne.
@@ -378,9 +381,34 @@ CZAS: ${new Date().toLocaleString("pl-PL", { timeZone: "Europe/Warsaw" })}`,
     messages,
   });
 
-  const inputTokens = res.usage?.input_tokens || 0;
-  const outputTokens = res.usage?.output_tokens || 0;
-  const raw = res.content[0]?.text || "";
+  let raw = response.content[0]?.text || "";
+  let inputTokens = response.usage?.input_tokens || 0;
+  let outputTokens = response.usage?.output_tokens || 0;
+
+  // Auto-kontynuacja
+  let retries = 0;
+  while (response.stop_reason === "max_tokens" && retries < 3) {
+    retries++;
+    console.log(`🔄 [ANSWER] Kontynuacja #${retries}`);
+
+    response = await client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: `Kontynuuj odpowiedź. Zwróć TYLKO kontynuację tekstu JSON, bez powtarzania tego co już jest.`,
+      messages: [
+        ...messages,
+        { role: "assistant", content: raw },
+        {
+          role: "user",
+          content: "Kontynuuj od miejsca przerwania. Dokończ JSON.",
+        },
+      ],
+    });
+
+    raw += response.content[0]?.text || "";
+    inputTokens += response.usage?.input_tokens || 0;
+    outputTokens += response.usage?.output_tokens || 0;
+  }
 
   console.log(
     `✍️ [ANSWER] Gotowe w ${Date.now() - start}ms (${inputTokens} in + ${outputTokens} out)`,
