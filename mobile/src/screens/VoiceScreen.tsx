@@ -208,8 +208,307 @@ function parseInline(
   return parts;
 }
 
-// ── Log Item ──────────────────────────────────────────────────
+// ── Action Bubble (mobile) ────────────────────────────────────
 
+const ACTION_LABELS: Record<string, string> = {
+  trello_create_card: "📋 Trello — nowa karta",
+  trello_move_card: "📋 Trello — przeniesienie karty",
+  gmail_send: "📧 Gmail — wysłanie emaila",
+  gmail_draft: "📧 Gmail — draft emaila",
+  gmail_reply: "📧 Gmail — odpowiedź",
+  gmail_forward: "📧 Gmail — przekazanie",
+  gmail_profile: "📧 Gmail — profil konta",
+  gmail_list: "📧 Gmail — lista emaili",
+  gmail_read: "📧 Gmail — treść emaila",
+  calendar_create: "📅 Kalendarz — nowe wydarzenie",
+  calendar_list: "📅 Kalendarz — lista wydarzeń",
+  reminder: "⏰ Przypomnienie",
+  note: "📝 Notatka",
+  web_search: "🔍 Wyszukiwanie",
+};
+
+function ActionRow({
+  icon,
+  label,
+  value,
+  mono = false,
+}: {
+  icon: string;
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <View style={actionStyles.row}>
+      <Text style={actionStyles.rowIcon}>{icon}</Text>
+      <Text style={actionStyles.rowLabel}>{label}:</Text>
+      <Text
+        style={[actionStyles.rowValue, mono && actionStyles.rowMono]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function BodyPreviewMobile({ body }: { body: string }) {
+  const [open, setOpen] = useState(false);
+  const preview = body.split("\n").find((l) => l.trim()) ?? body.slice(0, 60);
+  const hasMore = body.trim().length > preview.length + 5;
+
+  return (
+    <View style={actionStyles.bodyContainer}>
+      <Text style={actionStyles.bodyLabel}>✉️ Treść:</Text>
+      <View style={actionStyles.bodyBox}>
+        {open ? (
+          <Text style={actionStyles.bodyText}>{body}</Text>
+        ) : (
+          <Text style={actionStyles.bodyPreview}>
+            {preview}
+            {hasMore ? "…" : ""}
+          </Text>
+        )}
+        {hasMore && (
+          <Pressable
+            onPress={() => setOpen(!open)}
+            style={actionStyles.bodyToggle}
+          >
+            <Text style={actionStyles.bodyToggleText}>
+              {open ? "zwiń ▲" : "pokaż więcej ▼"}
+            </Text>
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function ActionBubble({
+  text,
+  type,
+}: {
+  text: string;
+  type: "action" | "error";
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (type === "error") {
+    return (
+      <View style={actionStyles.errorBox}>
+        <Text style={actionStyles.errorText}>{text}</Text>
+      </View>
+    );
+  }
+
+  const match = text.match(/^✅ ([\w_]+): (.+)$/s);
+  if (!match) {
+    return (
+      <View style={actionStyles.successBox}>
+        <Text style={actionStyles.successText}>{text}</Text>
+      </View>
+    );
+  }
+
+  const actionName = match[1];
+  const label = ACTION_LABELS[actionName] ?? `⚙️ ${actionName}`;
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(match[2]);
+  } catch {}
+
+  const renderDetails = () => {
+    if (!parsed)
+      return <Text style={actionStyles.fallbackText}>{match[2]}</Text>;
+
+    if (
+      ["gmail_send", "gmail_draft", "gmail_reply", "gmail_forward"].includes(
+        actionName,
+      )
+    ) {
+      return (
+        <View style={actionStyles.details}>
+          {parsed.to && <ActionRow icon="→" label="Do" value={parsed.to} />}
+          {parsed.subject && (
+            <ActionRow icon="📌" label="Temat" value={parsed.subject} />
+          )}
+          {parsed.body && <BodyPreviewMobile body={parsed.body} />}
+          {parsed.messageId && (
+            <ActionRow icon="🆔" label="ID" value={parsed.messageId} mono />
+          )}
+        </View>
+      );
+    }
+
+    if (actionName === "gmail_profile") {
+      return (
+        <View style={actionStyles.details}>
+          {parsed.email && (
+            <ActionRow icon="📧" label="Konto" value={parsed.email} />
+          )}
+          {parsed.messagesTotal != null && (
+            <ActionRow
+              icon="📨"
+              label="Wiadomości"
+              value={parsed.messagesTotal.toLocaleString()}
+            />
+          )}
+          {parsed.threadsTotal != null && (
+            <ActionRow
+              icon="🧵"
+              label="Wątki"
+              value={parsed.threadsTotal.toLocaleString()}
+            />
+          )}
+        </View>
+      );
+    }
+
+    if (actionName === "trello_create_card") {
+      return (
+        <View style={actionStyles.details}>
+          {parsed.name && (
+            <ActionRow icon="📋" label="Tytuł" value={parsed.name} />
+          )}
+          {parsed.url && (
+            <Pressable onPress={() => Linking.openURL(parsed.url)}>
+              <Text style={actionStyles.link}>↗ Otwórz kartę</Text>
+            </Pressable>
+          )}
+        </View>
+      );
+    }
+
+    if (actionName === "calendar_create") {
+      return (
+        <View style={actionStyles.details}>
+          {parsed.summary && (
+            <ActionRow icon="📅" label="Tytuł" value={parsed.summary} />
+          )}
+          {parsed.start?.dateTime && (
+            <ActionRow
+              icon="🕐"
+              label="Start"
+              value={new Date(parsed.start.dateTime).toLocaleString("pl-PL")}
+            />
+          )}
+        </View>
+      );
+    }
+
+    // Fallback
+    return (
+      <View style={actionStyles.details}>
+        {Object.entries(parsed)
+          .slice(0, 6)
+          .map(([k, v]) => (
+            <ActionRow
+              key={k}
+              icon="·"
+              label={k}
+              value={typeof v === "object" ? JSON.stringify(v) : String(v)}
+            />
+          ))}
+      </View>
+    );
+  };
+
+  return (
+    <View style={actionStyles.box}>
+      <Pressable
+        style={actionStyles.header}
+        onPress={() => setExpanded(!expanded)}
+      >
+        <View style={actionStyles.headerLeft}>
+          <Text style={actionStyles.check}>✓</Text>
+          <Text style={actionStyles.actionLabel}>{label}</Text>
+        </View>
+        <Text style={actionStyles.chevron}>{expanded ? "▲" : "▼"}</Text>
+      </Pressable>
+      {expanded && (
+        <View style={actionStyles.expandedBody}>{renderDetails()}</View>
+      )}
+    </View>
+  );
+}
+
+const actionStyles = StyleSheet.create({
+  box: {
+    backgroundColor: "#052e1a",
+    borderWidth: 1,
+    borderColor: "#166534",
+    borderRadius: 12,
+    marginBottom: 8,
+    overflow: "hidden",
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+  check: { color: "#4ade80", fontWeight: "700", fontSize: 14 },
+  actionLabel: { color: "#86efac", fontSize: 13, fontWeight: "600" },
+  chevron: { color: "#4b5563", fontSize: 11 },
+  expandedBody: {
+    borderTopWidth: 1,
+    borderTopColor: "#14532d",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  details: { gap: 6 },
+  row: { flexDirection: "row", alignItems: "center", gap: 6 },
+  rowIcon: { fontSize: 12, width: 18 },
+  rowLabel: { color: "#6b7280", fontSize: 12, minWidth: 40 },
+  rowValue: { color: "#e2e8f0", fontSize: 12, flex: 1 },
+  rowMono: {
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontSize: 11,
+  },
+  bodyContainer: { marginTop: 4 },
+  bodyLabel: { color: "#6b7280", fontSize: 12, marginBottom: 4 },
+  bodyBox: {
+    backgroundColor: "#0f2918",
+    borderRadius: 8,
+    padding: 10,
+  },
+  bodyText: { color: "#d1fae5", fontSize: 12, lineHeight: 18 },
+  bodyPreview: { color: "#9ca3af", fontSize: 12, fontStyle: "italic" },
+  bodyToggle: { marginTop: 6 },
+  bodyToggleText: { color: "#22d3ee", fontSize: 11, fontWeight: "600" },
+  link: { color: "#22d3ee", fontSize: 12, marginTop: 4 },
+  fallbackText: {
+    color: "#9ca3af",
+    fontSize: 11,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  errorBox: {
+    backgroundColor: "#1f0a0a",
+    borderWidth: 1,
+    borderColor: "#7f1d1d",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+  },
+  errorText: {
+    color: "#f87171",
+    fontSize: 12,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  successBox: {
+    backgroundColor: "#052e1a",
+    borderWidth: 1,
+    borderColor: "#166534",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+  },
+  successText: { color: "#4ade80", fontSize: 12 },
+});
+
+// ── Log Item ──────────────────────────────────────────────────
 function LogItem({ entry }: { entry: LogEntry }) {
   const [showStats, setShowStats] = useState(false);
   const [expandedSource, setExpandedSource] = useState<Source | null>(null);
@@ -227,21 +526,7 @@ function LogItem({ entry }: { entry: LogEntry }) {
   }
 
   if (entry.type === "action" || entry.type === "error") {
-    return (
-      <View style={[styles.logItem, { borderLeftColor: colors[entry.type] }]}>
-        <Text
-          style={[
-            styles.logText,
-            {
-              fontSize: 12,
-              fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-            },
-          ]}
-        >
-          {entry.text}
-        </Text>
-      </View>
-    );
+    return <ActionBubble text={entry.text} type={entry.type} />;
   }
 
   return (

@@ -2,6 +2,24 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
+function fixCodeBlocks(text) {
+  if (text.includes("```")) return text;
+  const langPatterns =
+    /\b(python|javascript|typescript|bash|sql|html|css|json|yaml|sh|jsx|tsx|nginx|prisma)\n([\s\S]*?)(?=\n\n[A-ZĄĆĘŁŃÓŚŹŻ]|\n\n$|$)/gi;
+  return text.replace(langPatterns, (match, lang, code) => {
+    const lines = code.trim().split("\n");
+    const looksLikeCode = lines.some(
+      (l) =>
+        /^\s{2,}/.test(l) ||
+        /^(def |class |import |from |const |let |var |function |if |for |while |return |print|console\.)/.test(
+          l.trim(),
+        ),
+    );
+    if (!looksLikeCode || lines.length < 2) return match;
+    return "```" + lang.toLowerCase() + "\n" + code.trimEnd() + "\n```";
+  });
+}
+
 const PRICING = {
   "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
   "claude-haiku-4-5": { input: 1.0, output: 5.0 },
@@ -21,63 +39,87 @@ const SYSTEM_PROMPT = `Jesteś wszechstronnym asystentem AI. Pomagasz we WSZYSTK
 
 DOSTĘPNE AKCJE:
 
-── TRELLO ──
-1. trello_create_card — tworzenie karty w Trello
-   params: { title: string, description?: string, listId?: string, labels?: string[] }
-2. trello_move_card — przeniesienie karty
-   params: { cardName: string, targetList: string }
+── TRELLO — ODCZYT ──
+1. trello_boards — lista boardów użytkownika
+   params: {} (brak)
+2. trello_board — przegląd boardu: wszystkie listy z kartami
+   params: { boardId?: string (domyślnie główny board) }
+3. trello_list_cards — karty na konkretnej liście
+   params: { listId?: string, listName?: string }
+4. trello_get_card — szczegóły karty (opis, checklista, komentarze)
+   params: { cardId: string }
+5. trello_search — wyszukaj karty po tekście
+   params: { query: string, boardId?: string }
+
+── TRELLO — ZAPIS ──
+6. trello_create_card — tworzenie karty w Trello
+   params: { title: string, description?: string, listId?: string, labels?: string[], due?: string }
+7. trello_move_card — przeniesienie karty
+   params: { cardName?: string, cardId?: string, targetList: string }
+8. trello_comment — dodaj komentarz do karty
+   params: { cardId?: string, cardName?: string, text: string }
+9. trello_archive — archiwizuj kartę
+   params: { cardId?: string, cardName?: string }
 
 ── GMAIL — WYSYŁANIE ──
-3. gmail_send — wysłanie emaila
+10. gmail_send — wysłanie emaila
    params: { to: string, subject: string, body: string, cc?: string, htmlBody?: string }
-4. gmail_draft — utworzenie draftu emaila
+11. gmail_draft — utworzenie draftu emaila
    params: { to: string, subject: string, body: string, cc?: string, htmlBody?: string }
-5. gmail_reply — odpowiedź na email (wymaga messageId z gmail_list lub gmail_read)
+12. gmail_reply — odpowiedź na email (wymaga messageId z gmail_list lub gmail_read)
    params: { messageId: string, body: string, replyAll?: boolean }
-6. gmail_forward — prześlij email dalej
+13. gmail_forward — prześlij email dalej
    params: { messageId: string, to: string, comment?: string }
 
 ── GMAIL — ODCZYT ──
-7. gmail_list — lista emaili (inbox, nieprzeczytane, wysłane, itp.)
+14. gmail_list — lista emaili (inbox, nieprzeczytane, wysłane, itp.)
    params: { query?: string, maxResults?: number (domyślnie 10), label?: string (INBOX|SENT|DRAFT|STARRED|SPAM|TRASH|UNREAD), pageToken?: string }
-   Zwraca: { emails: [{id, from, to, subject, date, snippet, isUnread, isStarred, hasAttachments}], total, nextPageToken }
-8. gmail_read — przeczytaj pełną treść emaila
+15. gmail_read — przeczytaj pełną treść emaila
    params: { messageId: string, markAsRead?: boolean (domyślnie true) }
-   Zwraca: pełny email z body, attachments, headers
-9. gmail_search — wyszukaj emaile (Gmail search syntax: "from:jan subject:raport after:2025/01/01 has:attachment")
+16. gmail_search — wyszukaj emaile (Gmail search syntax: "from:jan subject:raport after:2025/01/01 has:attachment")
    params: { query: string, maxResults?: number }
-10. gmail_thread — pobierz cały wątek emailowy
+17. gmail_thread — pobierz cały wątek emailowy
     params: { threadId: string, maxResults?: number }
 
 ── GMAIL — ORGANIZACJA ──
-11. gmail_trash — przenieś email do kosza
+18. gmail_trash — przenieś email do kosza
     params: { messageId: string }
-12. gmail_untrash — przywróć email z kosza
+19. gmail_untrash — przywróć email z kosza
     params: { messageId: string }
-13. gmail_mark_read — oznacz jako przeczytany/nieprzeczytany
+20. gmail_mark_read — oznacz jako przeczytany/nieprzeczytany
     params: { messageId: string, read?: boolean (domyślnie true) }
-14. gmail_star — oznacz/odznacz gwiazdkę
+21. gmail_star — oznacz/odznacz gwiazdkę
     params: { messageId: string, starred?: boolean (domyślnie true) }
-15. gmail_labels — pobierz listę etykiet Gmail
+22. gmail_labels — pobierz listę etykiet Gmail
     params: {} (brak)
-16. gmail_modify_labels — dodaj/usuń etykiety z emaila
+23. gmail_modify_labels — dodaj/usuń etykiety z emaila
     params: { messageId: string, addLabels?: string[], removeLabels?: string[] }
-17. gmail_batch_modify — zbiorcza operacja na wielu emailach
+24. gmail_batch_modify — zbiorcza operacja na wielu emailach
     params: { messageIds: string[], addLabels?: string[], removeLabels?: string[] }
-18. gmail_profile — informacje o koncie Gmail
+25. gmail_profile — informacje o koncie Gmail
     params: {} (brak)
 
 ── KALENDARZ ──
-19. calendar_create — utworzenie wydarzenia w kalendarzu
+26. calendar_create — utworzenie wydarzenia w kalendarzu
     params: { title: string, date: string (ISO), duration?: number (minuty), description?: string }
-20. calendar_list — lista nadchodzących wydarzeń
+27. calendar_list — lista nadchodzących wydarzeń
     params: { days?: number }
 
 ── NOTATKI ──
-21. reminder — ustawienie przypomnienia
+28. reminder — ustawienie przypomnienia
     params: { text: string, date: string (ISO) }
-22. note — zapisanie notatki
+29. note — zapisanie notatki
     params: { text: string, tags?: string[] }
+
+TRELLO WORKFLOW:
+- "pokaż mój board" / "co jest na tablicy" → trello_board (bez boardId = domyślny board)
+- "jakie mam boardy" → trello_boards
+- "co jest na liście Do zrobienia" → trello_list_cards z listName: "Do zrobienia"
+- "pokaż kartę X" / "szczegóły karty" → trello_get_card (wymaga cardId — podawaj je w odpowiedziach!)
+- "szukaj karty o bug" → trello_search z query
+- "dodaj komentarz do karty X" → trello_comment
+- "archiwizuj kartę X" → trello_archive
+- ZAWSZE podawaj cardId w wynikach — user potrzebuje go do dalszych operacji
 
 GMAIL WORKFLOW:
 - Gdy użytkownik pyta "co mam w mailu" / "pokaż emaile" / "sprawdź pocztę" → użyj gmail_list
@@ -316,4 +358,77 @@ export async function generateTopic(firstUserMessage) {
   } catch {
     return "Nowa konwersacja";
   }
+}
+
+/**
+ * Second-pass: Claude podsumowuje wyniki akcji odczytowych
+ */
+export async function summarizeActionResults(
+  userQuery,
+  actionResults,
+  model = "claude-haiku-4-5",
+) {
+  const maxTokens = MODEL_LIMITS[model] || 8192;
+
+  // Przygotuj dane z wyników akcji (ogranicz rozmiar)
+  const resultsText = actionResults
+    .map((a) => {
+      const data = JSON.stringify(a.result, null, 2);
+      const truncated =
+        data.length > 6000 ? data.slice(0, 6000) + "\n... (obcięto)" : data;
+      return `Wynik akcji "${a.action}" (params: ${JSON.stringify(a.params)}):\n${truncated}`;
+    })
+    .join("\n\n---\n\n");
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: maxTokens,
+    system: `Jesteś asystentem AI który prezentuje użytkownikowi wyniki zapytań. Otrzymujesz surowe dane z API (Gmail, Trello, Kalendarz itp.) i Twoim zadaniem jest przedstawić je w czytelny, naturalny sposób po polsku.
+
+ZASADY PREZENTACJI:
+- Pisz naturalnie, jakbyś opowiadał znajomemu co znalazłeś
+- ZAWSZE podawaj ID obiektów (email ID, card ID) — user potrzebuje ich do dalszych operacji
+
+DLA EMAILI:
+  📩 Od: [nadawca]
+  📌 Temat: [temat]  
+  📅 [data]
+  ✉️ [status: przeczytany/nieprzeczytany] [⭐ jeśli oznaczony]
+  ID: [id]
+  ---
+- Na końcu krótkie podsumowanie
+
+DLA TRELLO:
+- Board: nazwa, ile list, ile kart łącznie
+- Listy: prezentuj jako sekcje z kartami pod spodem
+- Karty: nazwa, etykiety (kolorowe), deadline (jeśli jest), przypisani
+- Format:
+  📋 Lista: [nazwa] ([X] kart)
+  ├─ 🟢 [nazwa karty] — [etykiety] [📅 deadline] [👤 przypisany]
+  ├─ 🔴 [nazwa karty] ...
+  └─ [nazwa karty]
+- Checklista: pokaż postęp (np. 3/5 zrobione)
+- Komentarze: pokaż ostatnie 2-3
+
+DLA KALENDARZA:
+- Wydarzenia chronologicznie z godziną i tytułem
+
+- Jeśli brak wyników — powiedz to wprost
+- NIE zwracaj JSON — zwróć TYLKO tekst do wyświetlenia`,
+    messages: [
+      {
+        role: "user",
+        content: `Moje pytanie: "${userQuery}"\n\nOto surowe wyniki:\n\n${resultsText}\n\nPrzedstaw mi te wyniki w czytelny sposób.`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0]?.text || "Nie udało się przetworzyć wyników.";
+
+  return {
+    response: text,
+    inputTokens: response.usage?.input_tokens || 0,
+    outputTokens: response.usage?.output_tokens || 0,
+  };
 }

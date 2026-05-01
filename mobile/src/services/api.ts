@@ -178,6 +178,7 @@ export function sendVoiceStreaming(
     };
 
     xhr.onload = () => {
+      // Try NDJSON result event first
       const lines = xhr.responseText.split("\n").filter(Boolean);
       for (const line of lines) {
         try {
@@ -188,6 +189,16 @@ export function sendVoiceStreaming(
           }
         } catch {}
       }
+
+      // Fallback: non-streaming JSON response (actions like gmail_send)
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (data.response !== undefined) {
+          resolve(data as VoiceResponse);
+          return;
+        }
+      } catch {}
+
       reject(new Error("No result in stream"));
     };
 

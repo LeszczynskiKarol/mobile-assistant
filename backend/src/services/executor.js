@@ -1,25 +1,83 @@
-import { trelloCreateCard, trelloMoveCard } from "../actions/trello.js";
 import {
-  gmailSend, gmailDraft, gmailList, gmailRead, gmailSearch,
-  gmailReply, gmailForward, gmailTrash, gmailUntrash,
-  gmailMarkRead, gmailStar, gmailModifyLabels, gmailGetLabels,
-  gmailGetThread, gmailBatchModify, gmailProfile,
+  trelloCreateCard,
+  trelloMoveCard,
+  trelloListBoards,
+  trelloGetBoard,
+  trelloListCards,
+  trelloGetCard,
+  trelloSearchCards,
+  trelloAddComment,
+  trelloArchiveCard,
+} from "../actions/trello.js";
+import {
+  gmailSend,
+  gmailDraft,
+  gmailList,
+  gmailRead,
+  gmailSearch,
+  gmailReply,
+  gmailForward,
+  gmailTrash,
+  gmailUntrash,
+  gmailMarkRead,
+  gmailStar,
+  gmailModifyLabels,
+  gmailGetLabels,
+  gmailGetThread,
+  gmailBatchModify,
+  gmailProfile,
 } from "../actions/gmail.js";
 import { calendarCreate, calendarList } from "../actions/calendar.js";
 import { createNote } from "../actions/notes.js";
 
-// Rejestr akcji — dodawaj nowe tutaj
 export const ACTION_REGISTRY = {
-  // ── Trello ──
+  // ── Trello — odczyt ──
+  trello_boards: {
+    handler: trelloListBoards,
+    description: "Lista boardów Trello",
+    params: [],
+  },
+  trello_board: {
+    handler: trelloGetBoard,
+    description: "Przegląd boardu — wszystkie listy z kartami",
+    params: ["boardId?"],
+  },
+  trello_list_cards: {
+    handler: trelloListCards,
+    description: "Karty na konkretnej liście",
+    params: ["listId?", "listName?"],
+  },
+  trello_get_card: {
+    handler: trelloGetCard,
+    description: "Szczegóły karty (opis, checklista, komentarze)",
+    params: ["cardId"],
+  },
+  trello_search: {
+    handler: trelloSearchCards,
+    description: "Wyszukaj karty po nazwie/tekście",
+    params: ["query", "boardId?"],
+  },
+
+  // ── Trello — zapis ──
   trello_create_card: {
     handler: trelloCreateCard,
     description: "Utwórz kartę w Trello",
-    params: ["title", "description?", "listId?", "labels?"],
+    params: ["title", "description?", "listId?", "labels?", "due?"],
   },
   trello_move_card: {
     handler: trelloMoveCard,
     description: "Przenieś kartę w Trello",
-    params: ["cardName", "targetList"],
+    params: ["cardName?", "cardId?", "targetList"],
+  },
+  trello_comment: {
+    handler: trelloAddComment,
+    description: "Dodaj komentarz do karty",
+    params: ["cardId?", "cardName?", "text"],
+  },
+  trello_archive: {
+    handler: trelloArchiveCard,
+    description: "Archiwizuj kartę",
+    params: ["cardId?", "cardName?"],
   },
 
   // ── Gmail — wysyłanie ──
@@ -35,7 +93,7 @@ export const ACTION_REGISTRY = {
   },
   gmail_reply: {
     handler: gmailReply,
-    description: "Odpowiedz na email (potrzebny messageId z gmail_list/gmail_read)",
+    description: "Odpowiedz na email",
     params: ["messageId", "body", "replyAll?"],
   },
   gmail_forward: {
@@ -47,7 +105,7 @@ export const ACTION_REGISTRY = {
   // ── Gmail — odczyt ──
   gmail_list: {
     handler: gmailList,
-    description: "Lista emaili (inbox, nieprzeczytane, wysłane itp.)",
+    description: "Lista emaili",
     params: ["query?", "maxResults?", "label?", "pageToken?"],
   },
   gmail_read: {
@@ -57,12 +115,12 @@ export const ACTION_REGISTRY = {
   },
   gmail_search: {
     handler: gmailSearch,
-    description: "Wyszukaj emaile (Gmail search syntax)",
+    description: "Wyszukaj emaile",
     params: ["query", "maxResults?"],
   },
   gmail_thread: {
     handler: gmailGetThread,
-    description: "Pobierz cały wątek emailowy (konwersację)",
+    description: "Pobierz cały wątek emailowy",
     params: ["threadId", "maxResults?"],
   },
 
@@ -79,7 +137,7 @@ export const ACTION_REGISTRY = {
   },
   gmail_mark_read: {
     handler: gmailMarkRead,
-    description: "Oznacz email jako przeczytany/nieprzeczytany",
+    description: "Oznacz jako przeczytany/nieprzeczytany",
     params: ["messageId", "read?"],
   },
   gmail_star: {
@@ -99,7 +157,7 @@ export const ACTION_REGISTRY = {
   },
   gmail_batch_modify: {
     handler: gmailBatchModify,
-    description: "Zbiorcza operacja na wielu emailach (np. oznacz wszystkie jako przeczytane)",
+    description: "Zbiorcza operacja na wielu emailach",
     params: ["messageIds", "addLabels?", "removeLabels?"],
   },
   gmail_profile: {
@@ -133,13 +191,8 @@ export const ACTION_REGISTRY = {
   },
 };
 
-/**
- * Wykonuje pojedynczą akcję na podstawie nazwy i parametrów
- */
 export async function executeAction({ action, params }) {
   const entry = ACTION_REGISTRY[action];
-  if (!entry) {
-    throw new Error(`Nieznana akcja: ${action}`);
-  }
+  if (!entry) throw new Error(`Nieznana akcja: ${action}`);
   return entry.handler(params);
 }
