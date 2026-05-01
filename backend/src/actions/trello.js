@@ -256,17 +256,117 @@ export async function trelloSearchCards({ query, boardId }) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /**
+ * Utwórz nowy board z listami
+ * @param {Object} params
+ * @param {string} params.name - nazwa boardu
+ * @param {string} [params.description] - opis
+ * @param {string[]} [params.lists] - nazwy list do utworzenia (domyślnie: Do zrobienia, W trakcie, Zrobione)
+ */
+export async function trelloCreateBoard({ name, description, lists }) {
+  if (!name) throw new Error("Brakuje name");
+
+  const board = await trelloFetch(
+    "/boards",
+    {
+      name,
+      desc: description || "",
+      defaultLists: "false", // nie twórz domyślnych list
+    },
+    { method: "POST" },
+  );
+
+  // Twórz listy w odwrotnej kolejności (Trello dodaje na górę)
+  const listNames = lists?.length
+    ? lists
+    : ["Zrobione", "W trakcie", "Do zrobienia"];
+  const createdLists = [];
+  for (const listName of [...listNames].reverse()) {
+    const list = await trelloFetch(
+      "/lists",
+      {
+        name: listName,
+        idBoard: board.id,
+      },
+      { method: "POST" },
+    );
+    createdLists.unshift({ id: list.id, name: list.name });
+  }
+
+  return {
+    boardId: board.id,
+    name: board.name,
+    url: board.url,
+    lists: createdLists,
+  };
+}
+
+/**
+ * Utwórz listę na boardzie
+ * @param {Object} params
+ * @param {string} params.name - nazwa listy
+ * @param {string} [params.boardId] - ID boardu (domyślnie default)
+ */
+export async function trelloCreateList({ name, boardId }) {
+  if (!name) throw new Error("Brakuje name");
+  const id = boardId || process.env.TRELLO_DEFAULT_BOARD_ID;
+  if (!id) throw new Error("Brakuje boardId");
+
+  const list = await trelloFetch(
+    "/lists",
+    {
+      name,
+      idBoard: id,
+    },
+    { method: "POST" },
+  );
+
+  return { listId: list.id, name: list.name, boardId: id };
+}
+
+/**
  * Utwórz kartę
  */
 export async function trelloCreateCard({
   title,
   description,
   listId,
+  listName,
   labels,
   due,
+  boardId,
+  boardName,
 }) {
-  const id = listId || process.env.TRELLO_DEFAULT_LIST_ID;
-  if (!id) throw new Error("Brakuje listId");
+  let bid = boardId;
+
+  // Znajdź board po nazwie
+  if (!bid && boardName) {
+    const boards = await trelloFetch("/members/me/boards", {
+      fields: "name",
+      filter: "open",
+    });
+    const found = boards.find((b) =>
+      b.name.toLowerCase().includes(boardName.toLowerCase()),
+    );
+    if (found) bid = found.id;
+    else throw new Error(`Nie znaleziono boardu "${boardName}"`);
+  }
+
+  let id = listId;
+  if (!id && listName) {
+    const searchBid = bid || process.env.TRELLO_DEFAULT_BOARD_ID;
+    if (searchBid) {
+      const lists = await trelloFetch(`/boards/${searchBid}/lists`, {
+        filter: "open",
+      });
+      const found = lists.find((l) =>
+        l.name.toLowerCase().includes(listName.toLowerCase()),
+      );
+      if (found) id = found.id;
+    }
+  }
+
+  if (!id) id = process.env.TRELLO_DEFAULT_LIST_ID;
+  if (!id) throw new Error("Brakuje listId lub listName");
   if (!title) throw new Error("Brakuje title");
 
   const params = { name: title, idList: id };
@@ -301,28 +401,26 @@ export async function trelloCreateCard({
 /**
  * Przenieś kartę (po nazwie lub ID)
  */
-export async function trelloMoveCard({ cardName, cardId, targetList }) {
-  // Znajdź kartę
+export async function trelloMoveCard({
+  cardName,
+  cardId,
+  boardId,
+  boardName,
+  targetList,
+}) {
   let card;
   if (cardId) {
     card = await trelloFetch(`/cards/${cardId}`, { fields: "name,idBoard" });
   } else if (cardName) {
-    const boardId = process.env.TRELLO_DEFAULT_BOARD_ID;
-    const cards = await trelloFetch(`/boards/${boardId}/cards`, {
-      fields: "name",
-      filter: "open",
-    });
-    card = cards.find((c) =>
-      c.name.toLowerCase().includes(cardName.toLowerCase()),
-    );
-    if (!card) throw new Error(`Nie znaleziono karty "${cardName}"`);
+    const cid = await findCardId(cardName, boardId, boardName);
+    card = await trelloFetch(`/cards/${cid}`, { fields: "name,idBoard" });
   } else {
     throw new Error("Brakuje cardName lub cardId");
   }
 
   // Znajdź docelową listę
-  const boardId = card.idBoard || process.env.TRELLO_DEFAULT_BOARD_ID;
-  const lists = await trelloFetch(`/boards/${boardId}/lists`, {
+  const bid2 = card.idBoard || process.env.TRELLO_DEFAULT_BOARD_ID;
+  const lists = await trelloFetch(`/boards/${bid2}/lists`, {
     filter: "open",
   });
   const target = lists.find((l) =>
@@ -341,21 +439,17 @@ export async function trelloMoveCard({ cardName, cardId, targetList }) {
 /**
  * Dodaj komentarz do karty
  */
-export async function trelloAddComment({ cardId, cardName, text }) {
+export async function trelloAddComment({
+  cardId,
+  cardName,
+  boardId,
+  boardName,
+  text,
+}) {
   if (!text) throw new Error("Brakuje text");
-
   let id = cardId;
   if (!id && cardName) {
-    const boardId = process.env.TRELLO_DEFAULT_BOARD_ID;
-    const cards = await trelloFetch(`/boards/${boardId}/cards`, {
-      fields: "name",
-      filter: "open",
-    });
-    const found = cards.find((c) =>
-      c.name.toLowerCase().includes(cardName.toLowerCase()),
-    );
-    if (!found) throw new Error(`Nie znaleziono karty "${cardName}"`);
-    id = found.id;
+    id = await findCardId(cardName, boardId, boardName);
   }
   if (!id) throw new Error("Brakuje cardId lub cardName");
 
@@ -370,22 +464,233 @@ export async function trelloAddComment({ cardId, cardName, text }) {
 /**
  * Archiwizuj kartę
  */
-export async function trelloArchiveCard({ cardId, cardName }) {
+export async function trelloArchiveCard({
+  cardId,
+  cardName,
+  boardId,
+  boardName,
+}) {
   let id = cardId;
   if (!id && cardName) {
-    const boardId = process.env.TRELLO_DEFAULT_BOARD_ID;
-    const cards = await trelloFetch(`/boards/${boardId}/cards`, {
-      fields: "name",
-      filter: "open",
-    });
-    const found = cards.find((c) =>
-      c.name.toLowerCase().includes(cardName.toLowerCase()),
-    );
-    if (!found) throw new Error(`Nie znaleziono karty "${cardName}"`);
-    id = found.id;
+    id = await findCardId(cardName, boardId, boardName);
   }
   if (!id) throw new Error("Brakuje cardId lub cardName");
 
   await trelloFetch(`/cards/${id}`, { closed: true }, { method: "PUT" });
   return { cardId: id, archived: true };
+}
+
+/**
+ * Edytuj kartę — zmień nazwę, opis, deadline, etykiety
+ */
+export async function trelloUpdateCard({
+  cardId,
+  cardName,
+  boardId,
+  boardName,
+  name,
+  description,
+  due,
+  dueComplete,
+  closed,
+}) {
+  let id = cardId;
+  if (!id && cardName) {
+    id = await findCardId(cardName, boardId, boardName);
+  }
+  if (!id) throw new Error("Brakuje cardId lub cardName");
+
+  const params = {};
+  if (name !== undefined) params.name = name;
+  if (description !== undefined) params.desc = description;
+  if (due !== undefined) params.due = due;
+  if (dueComplete !== undefined) params.dueComplete = String(dueComplete);
+  if (closed !== undefined) params.closed = String(closed);
+
+  if (Object.keys(params).length === 0)
+    throw new Error("Brak pól do aktualizacji");
+
+  const card = await trelloFetch(`/cards/${id}`, params, { method: "PUT" });
+  return {
+    cardId: card.id,
+    name: card.name,
+    url: card.shortUrl,
+    updated: Object.keys(params),
+  };
+}
+
+/**
+ * Usuń kartę na stałe
+ */
+export async function trelloDeleteCard({
+  cardId,
+  cardName,
+  boardId,
+  boardName,
+}) {
+  let id = cardId;
+  if (!id && cardName) {
+    id = await findCardId(cardName, boardId, boardName);
+  }
+  if (!id) throw new Error("Brakuje cardId lub cardName");
+
+  await trelloFetch(`/cards/${id}`, {}, { method: "DELETE" });
+  return { cardId: id, deleted: true };
+}
+
+/**
+ * Utwórz checklistę na karcie
+ */
+export async function trelloCreateChecklist({
+  cardId,
+  cardName,
+  boardId,
+  boardName,
+  name,
+  items,
+}) {
+  let id = cardId;
+  if (!id && cardName) {
+    id = await findCardId(cardName, boardId, boardName);
+  }
+  if (!id) throw new Error("Brakuje cardId lub cardName");
+  if (!name) throw new Error("Brakuje name checklisty");
+
+  const checklist = await trelloFetch(
+    `/cards/${id}/checklists`,
+    {
+      name,
+    },
+    { method: "POST" },
+  );
+
+  // Dodaj elementy jeśli podane
+  const createdItems = [];
+  if (items?.length) {
+    for (const item of items) {
+      const ci = await trelloFetch(
+        `/checklists/${checklist.id}/checkItems`,
+        {
+          name: typeof item === "string" ? item : item.name,
+        },
+        { method: "POST" },
+      );
+      createdItems.push({ id: ci.id, name: ci.name, state: ci.state });
+    }
+  }
+
+  return {
+    checklistId: checklist.id,
+    name: checklist.name,
+    cardId: id,
+    items: createdItems,
+  };
+}
+
+/**
+ * Oznacz element checklisty jako zrobiony/niezrobiony
+ */
+export async function trelloToggleCheckItem({
+  cardId,
+  cardName,
+  boardId,
+  boardName,
+  checkItemId,
+  checkItemName,
+  state,
+}) {
+  let id = cardId;
+  if (!id && cardName) {
+    id = await findCardId(cardName, boardId, boardName);
+  }
+  if (!id) throw new Error("Brakuje cardId lub cardName");
+
+  // Znajdź checkItem po nazwie jeśli nie podano ID
+  let ciId = checkItemId;
+  if (!ciId && checkItemName) {
+    const checklists = await trelloFetch(`/cards/${id}/checklists`, {
+      checkItem_fields: "name,state",
+    });
+    for (const cl of checklists) {
+      const found = cl.checkItems?.find((ci) =>
+        ci.name.toLowerCase().includes(checkItemName.toLowerCase()),
+      );
+      if (found) {
+        ciId = found.id;
+        break;
+      }
+    }
+    if (!ciId) throw new Error(`Nie znaleziono elementu "${checkItemName}"`);
+  }
+  if (!ciId) throw new Error("Brakuje checkItemId lub checkItemName");
+
+  // Domyślnie toggle: complete ↔ incomplete
+  const newState = state || "complete";
+
+  await trelloFetch(
+    `/cards/${id}/checkItem/${ciId}`,
+    {
+      state: newState,
+    },
+    { method: "PUT" },
+  );
+
+  return { cardId: id, checkItemId: ciId, state: newState };
+}
+
+/**
+ * Historia aktywności na boardzie (ostatnie akcje)
+ */
+export async function trelloActivity({ boardId, maxResults = 15 }) {
+  const id = boardId || process.env.TRELLO_DEFAULT_BOARD_ID;
+  if (!id) throw new Error("Brakuje boardId");
+
+  const actions = await trelloFetch(`/boards/${id}/actions`, {
+    filter: "all",
+    limit: String(Math.min(50, maxResults)),
+    fields: "data,type,date,memberCreator",
+    memberCreator_fields: "fullName,username",
+  });
+
+  return {
+    boardId: id,
+    activities: actions.map((a) => ({
+      type: a.type,
+      date: a.date,
+      by: a.memberCreator?.fullName || a.memberCreator?.username || "Nieznany",
+      card: a.data?.card?.name,
+      list: a.data?.list?.name || a.data?.listAfter?.name,
+      listBefore: a.data?.listBefore?.name,
+      text: a.data?.text,
+      board: a.data?.board?.name,
+    })),
+    total: actions.length,
+  };
+}
+
+// Helper — znajdź kartę po nazwie na domyślnym boardzie
+async function findCardId(cardName, boardId, boardName) {
+  let bid = boardId;
+  if (!bid && boardName) {
+    const boards = await trelloFetch("/members/me/boards", {
+      fields: "name",
+      filter: "open",
+    });
+    const found = boards.find((b) =>
+      b.name.toLowerCase().includes(boardName.toLowerCase()),
+    );
+    if (found) bid = found.id;
+    else throw new Error(`Nie znaleziono boardu "${boardName}"`);
+  }
+  if (!bid) bid = process.env.TRELLO_DEFAULT_BOARD_ID;
+  if (!bid) throw new Error("Brakuje boardId do wyszukania karty");
+  const cards = await trelloFetch(`/boards/${bid}/cards`, {
+    fields: "name",
+    filter: "open",
+  });
+  const found = cards.find((c) =>
+    c.name.toLowerCase().includes(cardName.toLowerCase()),
+  );
+  if (!found) throw new Error(`Nie znaleziono karty "${cardName}"`);
+  return found.id;
 }

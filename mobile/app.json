@@ -1,11 +1,13 @@
 {
   "expo": {
     "name": "MobileAssistant",
-    "slug": "mobile-assistant",
+    "slug": "voice-assistant",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "mobile-assistant",
-    "platforms": ["android"],
+    "platforms": [
+      "android"
+    ],
     "android": {
       "package": "pl.torweb.mobileassistant",
       "adaptiveIcon": {
@@ -25,7 +27,8 @@
           "microphonePermission": "MobileAssistant potrzebuje mikrofonu do rozpoznawania mowy",
           "speechRecognitionPermission": "MobileAssistant potrzebuje rozpoznawania mowy"
         }
-      ]
+      ],
+      "expo-speech-recognition"
     ],
     "extra": {
       "router": {

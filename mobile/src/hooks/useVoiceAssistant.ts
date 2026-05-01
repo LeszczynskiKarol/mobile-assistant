@@ -1,6 +1,11 @@
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from "expo-speech-recognition";
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
+
 import {
   sendVoiceCommand,
   sendVoiceStreaming,
@@ -19,11 +24,6 @@ function cleanForTTS(text: string): string {
     .replace(/\s{2,}/g, " ")
     .trim();
 }
-
-let Voice: any = null;
-try {
-  Voice = require("@react-native-voice/voice").default;
-} catch (e) {}
 
 export type VoiceState =
   | "idle"
@@ -50,31 +50,28 @@ export function useVoiceAssistant() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [model, setModel] = useState<ModelId>("claude-haiku-4-5");
   const [liveStatus, setLiveStatus] = useState<string>("");
-  const [voiceAvailable] = useState(() => Voice !== null);
+  const [voiceAvailable] = useState(true); // expo-speech-recognition zawsze dostępne
   const isMounted = useRef(true);
+  const processTextRef = useRef<((text: string) => Promise<void>) | null>(null);
+
+  // ── TUTAJ — zamiast starego useEffect z Voice ──
+  useSpeechRecognitionEvent("result", (e) => {
+    const text = e.results[0]?.transcript || "";
+    setTranscript(text);
+    if (e.isFinal && text.trim()) {
+      processTextRef.current?.(text.trim());
+    }
+  });
+
+  useSpeechRecognitionEvent("error", (e) => {
+    if (isMounted.current) {
+      setState("idle");
+    }
+  });
 
   useEffect(() => {
-    if (!Voice) return;
-    Voice.onSpeechResults = (e: any) => setTranscript(e.value?.[0] || "");
-    Voice.onSpeechPartialResults = (e: any) =>
-      setTranscript(e.value?.[0] || "");
-    Voice.onSpeechError = (e: any) => {
-      if (isMounted.current) {
-        setState("idle");
-        addLog("error", `Błąd mowy: ${e.error?.message || "unknown"}`);
-      }
-    };
     return () => {
       isMounted.current = false;
-      try {
-        Voice.destroy()
-          .then(() => {
-            try {
-              Voice.removeAllListeners();
-            } catch {}
-          })
-          .catch(() => {});
-      } catch {}
     };
   }, []);
 
@@ -167,7 +164,7 @@ export function useVoiceAssistant() {
           if (a.status === "success")
             addLog(
               "action",
-              `✅ ${a.action}: ${JSON.stringify(a.result).slice(0, 100)}`,
+              `✅ ${a.action}: ${JSON.stringify({ ...a.params, ...a.result }).slice(0, 5000)}`,
             );
           else if (a.status === "error")
             addLog("error", `❌ ${a.action}: ${a.error}`);
@@ -197,36 +194,34 @@ export function useVoiceAssistant() {
     [addLog, conversationId, model, state],
   );
 
+  useEffect(() => {
+    processTextRef.current = processText;
+  }, [processText]);
+
   const startListening = useCallback(async () => {
-    if (!Voice) {
-      addLog("error", "Mikrofon niedostępny w Expo Go ⌨️");
+    const { granted } =
+      await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!granted) {
+      addLog("error", "Brak uprawnień do mikrofonu");
       return;
     }
-    try {
-      Speech.stop();
-      setTranscript("");
-      setState("listening");
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      await Voice.start("pl-PL");
-    } catch {
-      setState("idle");
-    }
+    Speech.stop();
+    setTranscript("");
+    setState("listening");
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    ExpoSpeechRecognitionModule.start({ lang: "pl-PL", interimResults: true });
   }, [addLog]);
 
   const stopListening = useCallback(async () => {
-    if (!Voice) return;
-    try {
-      await Voice.stop();
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      const text = transcript.trim();
-      if (!text) {
-        setState("idle");
-        return;
-      }
-      await processText(text);
-    } catch {
+    ExpoSpeechRecognitionModule.stop();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // transcript already set by event handler
+    const text = transcript.trim();
+    if (!text) {
       setState("idle");
+      return;
     }
+    await processText(text);
   }, [transcript, processText]);
 
   const toggle = useCallback(() => {

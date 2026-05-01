@@ -638,3 +638,106 @@ export async function gmailProfile() {
     historyId: profile.historyId,
   };
 }
+
+/**
+ * Wyślij email z załącznikiem z Google Drive
+ */
+export async function gmailSendAttachment({
+  to,
+  subject,
+  body,
+  driveFileId,
+  cc,
+}) {
+  if (!to || !subject || !driveFileId)
+    throw new Error("Brakuje to, subject lub driveFileId");
+
+  const token = await getAccessToken();
+
+  // 1. Pobierz metadane pliku
+  const metaRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=name,mimeType`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!metaRes.ok) throw new Error(`Drive meta: ${metaRes.status}`);
+  const meta = await metaRes.json();
+
+  // 2. Pobierz zawartość pliku
+  let fileBuffer;
+  if (meta.mimeType.startsWith("application/vnd.google-apps.")) {
+    // Google Workspace → export jako PDF
+    const exportRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}/export?mimeType=application/pdf`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!exportRes.ok) throw new Error(`Drive export: ${exportRes.status}`);
+    fileBuffer = Buffer.from(await exportRes.arrayBuffer());
+    meta.mimeType = "application/pdf";
+    meta.name = meta.name.replace(/\.[^.]+$/, "") + ".pdf";
+  } else {
+    const dlRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!dlRes.ok) throw new Error(`Drive download: ${dlRes.status}`);
+    fileBuffer = Buffer.from(await dlRes.arrayBuffer());
+  }
+
+  const fileBase64 = fileBuffer.toString("base64");
+  const boundary = "boundary_" + Date.now().toString(36);
+
+  // 3. Zbuduj MIME
+  const mimeLines = [
+    `From: ${process.env.GMAIL_FROM}`,
+    `To: ${to}`,
+    cc ? `Cc: ${cc}` : "",
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    "",
+    body || "",
+    "",
+    `--${boundary}`,
+    `Content-Type: ${meta.mimeType}; name="${meta.name}"`,
+    `Content-Disposition: attachment; filename="${meta.name}"`,
+    `Content-Transfer-Encoding: base64`,
+    "",
+    fileBase64,
+    `--${boundary}--`,
+  ]
+    .filter((l) => l !== "")
+    .join("\r\n");
+
+  const raw = Buffer.from(mimeLines)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  // 4. Wyślij
+  const sendRes = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ raw }),
+    },
+  );
+  if (!sendRes.ok)
+    throw new Error(`Gmail send: ${sendRes.status}: ${await sendRes.text()}`);
+  const result = await sendRes.json();
+
+  return {
+    messageId: result.id,
+    to,
+    subject,
+    attachment: meta.name,
+    attachmentSize: fileBuffer.length,
+  };
+}

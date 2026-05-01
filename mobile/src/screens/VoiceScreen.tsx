@@ -150,7 +150,7 @@ function parseInline(
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   // Match **bold**, *italic*, [N] footnotes
-  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|\[(\d+)\])/g;
+  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|\[(\d+)\]|(https?:\/\/[^\s]+))/g;
   let lastIdx = 0;
   let match;
   let i = 0;
@@ -196,8 +196,18 @@ function parseInline(
           [{match[4]}]
         </Text>,
       );
+    } else if (match[5]) {
+      const url = match[5];
+      parts.push(
+        <Text
+          key={`${keyPrefix}-url${i++}`}
+          style={{ color: "#06b6d4" }}
+          onPress={() => Linking.openURL(url)}
+        >
+          {url.length > 40 ? url.slice(0, 40) + "…" : url}
+        </Text>,
+      );
     }
-
     lastIdx = match.index + match[0].length;
   }
 
@@ -211,17 +221,77 @@ function parseInline(
 // ── Action Bubble (mobile) ────────────────────────────────────
 
 const ACTION_LABELS: Record<string, string> = {
+  // Trello
   trello_create_card: "📋 Trello — nowa karta",
+  trello_board: "📋 Trello — przegląd boardu",
+  trello_boards: "📋 Trello — lista boardów",
+  trello_list_cards: "📋 Trello — karty na liście",
+  trello_get_card: "📋 Trello — szczegóły karty",
+  trello_search: "📋 Trello — wyszukiwanie",
   trello_move_card: "📋 Trello — przeniesienie karty",
-  gmail_send: "📧 Gmail — wysłanie emaila",
-  gmail_draft: "📧 Gmail — draft emaila",
+  trello_update_card: "📋 Trello — edycja karty",
+  trello_create_board: "📋 Trello — nowy board",
+  trello_create_list: "📋 Trello — nowa lista",
+  trello_comment: "📋 Trello — komentarz",
+  trello_archive: "📋 Trello — archiwizacja",
+  trello_delete: "📋 Trello — usunięcie karty",
+  trello_checklist: "📋 Trello — checklista",
+  trello_toggle_check: "📋 Trello — checkbox",
+  trello_activity: "📋 Trello — aktywność",
+  // Gmail
+  gmail_send: "📧 Gmail — wysłanie",
+  gmail_draft: "📧 Gmail — draft",
   gmail_reply: "📧 Gmail — odpowiedź",
   gmail_forward: "📧 Gmail — przekazanie",
-  gmail_profile: "📧 Gmail — profil konta",
   gmail_list: "📧 Gmail — lista emaili",
-  gmail_read: "📧 Gmail — treść emaila",
+  gmail_read: "📧 Gmail — odczyt emaila",
+  gmail_search: "📧 Gmail — wyszukiwanie",
+  gmail_thread: "📧 Gmail — wątek",
+  gmail_trash: "📧 Gmail — kosz",
+  gmail_untrash: "📧 Gmail — przywrócenie",
+  gmail_mark_read: "📧 Gmail — oznaczenie",
+  gmail_star: "📧 Gmail — gwiazdka",
+  gmail_labels: "📧 Gmail — etykiety",
+  gmail_modify_labels: "📧 Gmail — zmiana etykiet",
+  gmail_batch_modify: "📧 Gmail — operacja zbiorcza",
+  gmail_profile: "📧 Gmail — profil",
+  gmail_send_attachment: "📧 Gmail — email z załącznikiem",
+  // Calendar
   calendar_create: "📅 Kalendarz — nowe wydarzenie",
   calendar_list: "📅 Kalendarz — lista wydarzeń",
+  calendar_get: "📅 Kalendarz — szczegóły",
+  calendar_update: "📅 Kalendarz — edycja",
+  calendar_delete: "📅 Kalendarz — usunięcie",
+  calendar_search: "📅 Kalendarz — wyszukiwanie",
+  calendar_quick_add: "📅 Kalendarz — szybkie dodanie",
+  calendar_calendars: "📅 Kalendarz — lista kalendarzy",
+  calendar_move: "📅 Kalendarz — przeniesienie",
+  calendar_attach: "📅 Kalendarz — załącznik",
+  calendar_create_calendar: "📅 Kalendarz — nowy kalendarz",
+  calendar_delete_calendar: "📅 Kalendarz — usunięcie kalendarza",
+  // Contacts
+  contacts_search: "👤 Kontakty — wyszukiwanie",
+  contacts_list: "👤 Kontakty — lista",
+  contacts_email: "👤 Kontakty — szukanie emaila",
+  contacts_gmail: "👤 Kontakty — historia Gmail",
+  // Drive
+  drive_search: "💾 Drive — wyszukiwanie",
+  drive_recent: "💾 Drive — ostatnie pliki",
+  drive_file: "💾 Drive — szczegóły pliku",
+  drive_folder: "💾 Drive — folder",
+  drive_storage: "💾 Drive — pojemność",
+  drive_read: "💾 Drive — odczyt pliku",
+  drive_share: "💾 Drive — udostępnienie",
+  drive_export: "💾 Drive — eksport",
+  drive_trash: "💾 Drive — kosz",
+  drive_untrash: "💾 Drive — przywrócenie",
+  drive_delete: "💾 Drive — usunięcie",
+  drive_batch_trash: "💾 Drive — masowy kosz",
+  drive_empty_trash: "💾 Drive — opróżnienie kosza",
+  drive_update: "💾 Drive — edycja metadanych",
+  drive_move: "💾 Drive — przeniesienie",
+  drive_create_folder: "💾 Drive — nowy folder",
+  // Other
   reminder: "⏰ Przypomnienie",
   note: "📝 Notatka",
   web_search: "🔍 Wyszukiwanie",
@@ -340,6 +410,84 @@ function ActionBubble({
       );
     }
 
+    if (actionName === "trello_board") {
+      const board = parsed.board;
+      const lists: any[] = parsed.lists || [];
+      const totalCards = lists.reduce(
+        (sum: number, l: any) => sum + (l.cards?.length || 0),
+        0,
+      );
+      return (
+        <View style={actionStyles.details}>
+          {board?.name && (
+            <ActionRow icon="📋" label="Board" value={board.name} />
+          )}
+          {board?.url && (
+            <Pressable onPress={() => Linking.openURL(board.url)}>
+              <Text style={actionStyles.link}>↗ Otwórz w Trello</Text>
+            </Pressable>
+          )}
+          {board?.lastActivity && (
+            <ActionRow
+              icon="🕐"
+              label="Aktywność"
+              value={new Date(board.lastActivity).toLocaleDateString("pl-PL")}
+            />
+          )}
+          <ActionRow
+            icon="📊"
+            label="Listy"
+            value={`${lists.length} | ${totalCards} kart`}
+          />
+          {lists.map((list: any) => (
+            <View key={list.id} style={{ marginTop: 6 }}>
+              <Text
+                style={{ color: "#86efac", fontSize: 12, fontWeight: "600" }}
+              >
+                📋 {list.name} ({list.cards?.length || 0})
+              </Text>
+              {list.cards?.map((card: any) => (
+                <Pressable
+                  key={card.id}
+                  onPress={() => card.url && Linking.openURL(card.url)}
+                  style={{
+                    paddingLeft: 10,
+                    borderLeftWidth: 1,
+                    borderLeftColor: "#14532d",
+                    marginTop: 3,
+                  }}
+                >
+                  <Text style={{ color: "#cbd5e1", fontSize: 11 }}>
+                    📝 {card.name}
+                  </Text>
+                  {card.description ? (
+                    <Text
+                      style={{ color: "#6b7280", fontSize: 10 }}
+                      numberOfLines={1}
+                    >
+                      {card.description.slice(0, 60)}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              ))}
+              {(!list.cards || list.cards.length === 0) && (
+                <Text
+                  style={{
+                    color: "#4b5563",
+                    fontSize: 10,
+                    paddingLeft: 10,
+                    fontStyle: "italic",
+                  }}
+                >
+                  pusta
+                </Text>
+              )}
+            </View>
+          ))}
+        </View>
+      );
+    }
+
     if (actionName === "gmail_profile") {
       return (
         <View style={actionStyles.details}>
@@ -391,6 +539,99 @@ function ActionBubble({
               label="Start"
               value={new Date(parsed.start.dateTime).toLocaleString("pl-PL")}
             />
+          )}
+        </View>
+      );
+    }
+
+    if (actionName === "calendar_list" || actionName === "calendar_search") {
+      const events = parsed.events || parsed;
+      if (Array.isArray(events)) {
+        return (
+          <View style={actionStyles.details}>
+            {events.map((ev: any, i: number) => (
+              <View key={i} style={{ marginBottom: 6 }}>
+                <ActionRow
+                  icon="📅"
+                  label="Wydarzenie"
+                  value={ev.title || ev.summary || "?"}
+                />
+                {ev.start && (
+                  <ActionRow
+                    icon="🕐"
+                    label="Start"
+                    value={new Date(ev.start).toLocaleString("pl-PL")}
+                  />
+                )}
+                {ev.location && (
+                  <ActionRow icon="📍" label="Miejsce" value={ev.location} />
+                )}
+              </View>
+            ))}
+          </View>
+        );
+      }
+    }
+
+    if (actionName === "calendar_calendars") {
+      const cals = parsed.calendars || [];
+      return (
+        <View style={actionStyles.details}>
+          {cals.map((c: any, i: number) => (
+            <ActionRow
+              key={i}
+              icon={c.primary ? "⭐" : "📅"}
+              label={c.name}
+              value={c.accessRole}
+            />
+          ))}
+        </View>
+      );
+    }
+
+    if (actionName === "contacts_email") {
+      return (
+        <View style={actionStyles.details}>
+          {parsed.name && (
+            <ActionRow icon="👤" label="Kontakt" value={parsed.name} />
+          )}
+          {parsed.email && (
+            <ActionRow icon="📧" label="Email" value={parsed.email} />
+          )}
+        </View>
+      );
+    }
+
+    if (actionName?.startsWith("drive_")) {
+      return (
+        <View style={actionStyles.details}>
+          {parsed.name && (
+            <ActionRow icon="📄" label="Plik" value={parsed.name} />
+          )}
+          {parsed.fileId && (
+            <ActionRow icon="🆔" label="ID" value={parsed.fileId} mono />
+          )}
+          {parsed.trashed !== undefined && (
+            <ActionRow
+              icon="🗑"
+              label="Status"
+              value={parsed.trashed ? "W koszu" : "Przywrócono"}
+            />
+          )}
+          {parsed.deleted && (
+            <ActionRow icon="❌" label="Status" value="Usunięto na stałe" />
+          )}
+          {parsed.sharedWith && (
+            <ActionRow
+              icon="👥"
+              label="Udostępniono"
+              value={parsed.sharedWith}
+            />
+          )}
+          {parsed.link && (
+            <Pressable onPress={() => Linking.openURL(parsed.link)}>
+              <Text style={actionStyles.link}>↗ Otwórz</Text>
+            </Pressable>
           )}
         </View>
       );

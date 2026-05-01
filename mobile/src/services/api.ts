@@ -269,3 +269,48 @@ export async function getStats(): Promise<GlobalStats> {
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }
+
+// ── File upload (for attachments) ──
+
+export interface ProcessedFile {
+  s3Key: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  extractedText?: string;
+  visionDescription?: string;
+  processingMethod: string;
+}
+
+export async function uploadFiles(
+  files: { uri: string; name: string; type: string }[],
+): Promise<{ files: ProcessedFile[] }> {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", {
+      uri: file.uri,
+      name: file.name,
+      type: file.type,
+    } as any);
+  }
+
+  const res = await fetch(`${API_URL}/api/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${VOICE_TOKEN}` },
+    body: formData,
+  });
+  if (!res.ok) throw new Error(`Upload error ${res.status}`);
+  return res.json();
+}
+
+export async function getDownloadUrl(s3Key: string): Promise<string> {
+  const res = await fetch(
+    `${API_URL}/api/download?key=${encodeURIComponent(s3Key)}`,
+    {
+      headers: headers(),
+    },
+  );
+  if (!res.ok) throw new Error(`Download error ${res.status}`);
+  const data = await res.json();
+  return data.url;
+}

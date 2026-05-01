@@ -112,11 +112,23 @@ export async function needsResearch(userMessage, model) {
 Zwróć TYLKO: {"needsResearch": true/false, "reason": "krótko"}
 Bez backticks, bez markdown, TYLKO JSON.
 
-TAK: aktualne wydarzenia, ceny, newsy, firmy, produkty, technologie, statystyki, porównania, trendy.
-NIE: rozmowa, akcje (Trello/Gmail/Calendar), proste pytania, polecenia do wykonania.`,
+ZAWSZE false (NIE research) gdy zapytanie dotyczy:
+- Trello: board, karta, lista, tablica, zadanie, checklist, przenieś, archiwizuj, stwórz board/kartę
+- Gmail/email: poczta, mail, skrzynka, wyślij, odpowiedz, przeczytaj email, nieprzeczytane, draft
+- Kontakty: kontakt, znajdź osobę, email kogoś, numer telefonu
+- Google Drive: plik, dokument, folder, drive, co mam na dysku
+- Kalendarz: wydarzenie, spotkanie, co mam w kalendarzu, dodaj do kalendarza
+- Notatki/przypomnienia: zapisz, zanotuj, przypomnij
+- Rozmowa: powitania, pytania osobiste, prośby o kod, analiza tekstu, tłumaczenie
+- Polecenia do wykonania (cokolwiek z "zrób", "stwórz", "dodaj", "usuń", "przenieś", "wyślij", "sprawdź moją/moje")
+
+TAK (research) TYLKO gdy:
+- Aktualne wydarzenia, newsy, ceny, trendy
+- Pytania o firmy, produkty, technologie wymagające aktualnych danych z internetu
+- Porównania technologii, recenzje, statystyki
+- Jawne "wyszukaj", "znajdź w internecie", "co nowego w..."`,
     messages: [{ role: "user", content: userMessage }],
   });
-
   const raw = res.content[0]?.text || "";
   try {
     const cleaned = raw

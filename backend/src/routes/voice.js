@@ -13,6 +13,17 @@ const ALLOWED_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6"];
 
 // Akcje "odczytowe" — wymagają podsumowania wyników przez Claude
 const READ_ACTIONS = new Set([
+  "contacts_search",
+  "calendar_get",
+  "calendar_search",
+  "calendar_calendars",
+  "contacts_list",
+  "drive_read",
+  "drive_search",
+  "drive_recent",
+  "drive_file",
+  "drive_folder",
+  "drive_storage",
   "gmail_list",
   "gmail_read",
   "gmail_search",
@@ -24,6 +35,8 @@ const READ_ACTIONS = new Set([
   "trello_list_cards",
   "trello_get_card",
   "trello_search",
+  "trello_activity",
+  "trello_create_board", // zwraca listId potrzebne do dodawania kart
   "calendar_list",
 ]);
 
@@ -276,6 +289,56 @@ export async function voiceRoutes(app) {
             }
           }
           finalResponse.actions = executedActions;
+
+          // ── CHAIN: kontynuacja po contacts_email ──
+          const contactResult = executedActions.find(
+            (a) =>
+              a.action === "contacts_email" &&
+              a.status === "success" &&
+              a.result?.email,
+          );
+          const alreadySent = executedActions.find(
+            (a) => a.action === "gmail_send" && a.status === "success",
+          );
+          if (contactResult && !alreadySent) {
+            console.log(
+              `🔗 [CHAIN] Znaleziono email ${contactResult.result.email}, kontynuuję...`,
+            );
+            const chainResponse = await interpretIntent(
+              `Znalazłem email osoby: ${contactResult.result.name} <${contactResult.result.email}>. Kontynuuj wykonanie mojego poprzedniego polecenia: "${text}". Jeśli masz wystarczająco informacji (temat i treść) — wyślij maila. Jeśli user nie podał treści — wymyśl coś odpowiedniego sam.`,
+              {
+                context: { foundEmail: contactResult.result.email },
+                history: dbHistory,
+                model,
+              },
+            );
+            // Wykonaj akcje z chain response
+            for (const action of chainResponse.actions) {
+              console.log(`🔧 [CHAIN ACTION] ${action.action}`);
+              try {
+                const result = await executeAction(action);
+                executedActions.push({ ...action, status: "success", result });
+              } catch (err) {
+                executedActions.push({
+                  ...action,
+                  status: "error",
+                  error: err.message,
+                });
+              }
+            }
+            finalResponse.response = chainResponse.response;
+            finalResponse.inputTokens += chainResponse.inputTokens || 0;
+            finalResponse.outputTokens += chainResponse.outputTokens || 0;
+            finalResponse.totalTokens =
+              finalResponse.inputTokens + finalResponse.outputTokens;
+            finalResponse.costUsd = calculateCost(
+              model,
+              finalResponse.inputTokens,
+              finalResponse.outputTokens,
+            );
+            finalResponse.latencyMs = Date.now() - startTime;
+            finalResponse.actions = executedActions;
+          }
 
           // ── SECOND PASS: jeśli były akcje odczytowe, podsumuj wyniki ──
           const readResults = executedActions.filter(
