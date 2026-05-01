@@ -6,11 +6,11 @@ import {
   ScrollView,
   TextInput,
   StyleSheet,
-  SafeAreaView,
   ActivityIndicator,
   Alert,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import {
   getConversations,
@@ -199,7 +199,10 @@ export default function ConversationsScreen() {
           returnKeyType="search"
         />
         {searchQuery.length > 0 && (
-          <Pressable onPress={() => setSearchQuery("")} style={styles.clearSearch}>
+          <Pressable
+            onPress={() => setSearchQuery("")}
+            style={styles.clearSearch}
+          >
             <Text style={styles.clearSearchText}>✕</Text>
           </Pressable>
         )}
@@ -209,12 +212,20 @@ export default function ConversationsScreen() {
         style={styles.list}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3b82f6" />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#3b82f6"
+          />
         }
       >
         {/* Wyniki wyszukiwania */}
         {isSearching && (
-          <ActivityIndicator size="small" color="#3b82f6" style={{ marginVertical: 20 }} />
+          <ActivityIndicator
+            size="small"
+            color="#3b82f6"
+            style={{ marginVertical: 20 }}
+          />
         )}
 
         {searchResults && !isSearching && (
@@ -306,7 +317,10 @@ export default function ConversationsScreen() {
                       {conv.messageCount} wiad.
                     </Text>
                     <Text style={styles.convMetaText}>
-                      {(conv.totalInputTokens + conv.totalOutputTokens).toLocaleString()} tok
+                      {(
+                        conv.totalInputTokens + conv.totalOutputTokens
+                      ).toLocaleString()}{" "}
+                      tok
                     </Text>
                     <Text style={styles.convMetaText}>
                       ${conv.totalCostUsd.toFixed(4)}
@@ -366,10 +380,17 @@ function formatDate(iso: string): string {
   const now = new Date();
   const diff = now.getTime() - d.getTime();
   if (diff < 86_400_000) {
-    return d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString("pl-PL", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
   if (diff < 7 * 86_400_000) {
-    return d.toLocaleDateString("pl-PL", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("pl-PL", {
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
   return d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" });
 }

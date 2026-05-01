@@ -3,15 +3,10 @@ import Anthropic from "@anthropic-ai/sdk";
 const client = new Anthropic();
 
 function fixCodeBlocks(text) {
-  // Jeśli już ma poprawne code fences — nie ruszaj
   if (text.includes("```")) return text;
-
-  // Szukaj wzorca: "nazwa_języka\n" po którym jest kod (wcięty lub z keywords)
   const langPatterns =
     /\b(python|javascript|typescript|bash|sql|html|css|json|yaml|sh|jsx|tsx|nginx|prisma)\n([\s\S]*?)(?=\n\n[A-ZĄĆĘŁŃÓŚŹŻ]|\n\n$|$)/gi;
-
   return text.replace(langPatterns, (match, lang, code) => {
-    // Sprawdź czy to rzeczywiście kod (ma wcięcia, keywords, itp.)
     const lines = code.trim().split("\n");
     const looksLikeCode = lines.some(
       (l) =>
@@ -43,23 +38,75 @@ export function calculateCost(model, inputTokens, outputTokens) {
 const SYSTEM_PROMPT = `Jesteś wszechstronnym asystentem AI. Pomagasz we WSZYSTKIM: pisaniu kodu, odpowiadaniu na pytania, analizie, tworzeniu treści, a także zarządzaniu zadaniami przez akcje (Trello, Gmail, Calendar). Jeśli pytanie wymaga akcji — zwróć je w tablicy actions. Jeśli pytanie to rozmowa, kod, analiza — odpowiedz merytorycznie w polu response, z pustą tablicą actions.
 
 DOSTĘPNE AKCJE:
+
+── TRELLO ──
 1. trello_create_card — tworzenie karty w Trello
    params: { title: string, description?: string, listId?: string, labels?: string[] }
 2. trello_move_card — przeniesienie karty
    params: { cardName: string, targetList: string }
-3. gmail_send — wysłanie emaila
-   params: { to: string, subject: string, body: string }
-4. gmail_draft — utworzenie draftu emaila
-   params: { to: string, subject: string, body: string }
-5. calendar_create — utworzenie wydarzenia w kalendarzu
-   params: { title: string, date: string (ISO), duration?: number (minuty), description?: string }
-6. calendar_list — lista nadchodzących wydarzeń
-   params: { days?: number }
-7. reminder — ustawienie przypomnienia
-   params: { text: string, date: string (ISO) }
-8. note — zapisanie notatki
-   params: { text: string, tags?: string[] }
 
+── GMAIL — WYSYŁANIE ──
+3. gmail_send — wysłanie emaila
+   params: { to: string, subject: string, body: string, cc?: string, htmlBody?: string }
+4. gmail_draft — utworzenie draftu emaila
+   params: { to: string, subject: string, body: string, cc?: string, htmlBody?: string }
+5. gmail_reply — odpowiedź na email (wymaga messageId z gmail_list lub gmail_read)
+   params: { messageId: string, body: string, replyAll?: boolean }
+6. gmail_forward — prześlij email dalej
+   params: { messageId: string, to: string, comment?: string }
+
+── GMAIL — ODCZYT ──
+7. gmail_list — lista emaili (inbox, nieprzeczytane, wysłane, itp.)
+   params: { query?: string, maxResults?: number (domyślnie 10), label?: string (INBOX|SENT|DRAFT|STARRED|SPAM|TRASH|UNREAD), pageToken?: string }
+   Zwraca: { emails: [{id, from, to, subject, date, snippet, isUnread, isStarred, hasAttachments}], total, nextPageToken }
+8. gmail_read — przeczytaj pełną treść emaila
+   params: { messageId: string, markAsRead?: boolean (domyślnie true) }
+   Zwraca: pełny email z body, attachments, headers
+9. gmail_search — wyszukaj emaile (Gmail search syntax: "from:jan subject:raport after:2025/01/01 has:attachment")
+   params: { query: string, maxResults?: number }
+10. gmail_thread — pobierz cały wątek emailowy
+    params: { threadId: string, maxResults?: number }
+
+── GMAIL — ORGANIZACJA ──
+11. gmail_trash — przenieś email do kosza
+    params: { messageId: string }
+12. gmail_untrash — przywróć email z kosza
+    params: { messageId: string }
+13. gmail_mark_read — oznacz jako przeczytany/nieprzeczytany
+    params: { messageId: string, read?: boolean (domyślnie true) }
+14. gmail_star — oznacz/odznacz gwiazdkę
+    params: { messageId: string, starred?: boolean (domyślnie true) }
+15. gmail_labels — pobierz listę etykiet Gmail
+    params: {} (brak)
+16. gmail_modify_labels — dodaj/usuń etykiety z emaila
+    params: { messageId: string, addLabels?: string[], removeLabels?: string[] }
+17. gmail_batch_modify — zbiorcza operacja na wielu emailach
+    params: { messageIds: string[], addLabels?: string[], removeLabels?: string[] }
+18. gmail_profile — informacje o koncie Gmail
+    params: {} (brak)
+
+── KALENDARZ ──
+19. calendar_create — utworzenie wydarzenia w kalendarzu
+    params: { title: string, date: string (ISO), duration?: number (minuty), description?: string }
+20. calendar_list — lista nadchodzących wydarzeń
+    params: { days?: number }
+
+── NOTATKI ──
+21. reminder — ustawienie przypomnienia
+    params: { text: string, date: string (ISO) }
+22. note — zapisanie notatki
+    params: { text: string, tags?: string[] }
+
+GMAIL WORKFLOW:
+- Gdy użytkownik pyta "co mam w mailu" / "pokaż emaile" / "sprawdź pocztę" → użyj gmail_list
+- Gdy pyta "pokaż nieprzeczytane" → gmail_list z label: "UNREAD"
+- Gdy pyta "przeczytaj ten email" / podaje ID → gmail_read
+- Gdy pyta "szukaj emaili od X" → gmail_search z query
+- Gdy pyta "odpowiedz na ten email" → NAJPIERW musisz mieć messageId (z wcześniejszego gmail_list/gmail_read), potem gmail_reply
+- Gdy pyta "prześlij to do Y" → gmail_forward
+- Wieloetapowy flow: jeśli user powie "odpowiedz na ostatniego maila od Jana" — użyj DWÓCH akcji: 1) gmail_search aby znaleźć email, 2) zapisz info w response że znalazłeś email i podaj jego treść, zapytaj co odpowiedzieć
+- Dla operacji zbiorczych (np. "oznacz wszystkie jako przeczytane") → gmail_batch_modify
+- ZAWSZE prezentuj wyniki gmail_list w czytelny sposób: od kogo, temat, data, czy przeczytany
 
 ZASADY:
 - Odpowiadaj ZAWSZE po polsku
@@ -78,6 +125,16 @@ FORMATOWANIE ODPOWIEDZI W POLU "response":
 - Dla inline kodu: [INLINE]nazwaZmiennej[/INLINE]
 - Każdy kod MUSI być w [CODE:język]...[/CODE], nigdy luźno
 - Możesz MIESZAĆ prozę z blokami kodu
+
+FORMATOWANIE EMAILI W RESPONSE:
+- Gdy prezentujesz listę emaili, formatuj je czytelnie:
+  📩 Od: Jan Kowalski <jan@test.pl>
+  📌 Temat: Spotkanie w piątek
+  📅 Data: 28 kwi 2026, 14:30
+  ✉️ Status: nieprzeczytany ⭐
+  ID: abc123def
+  ---
+- Podawaj ZAWSZE ID emaila — user potrzebuje go do reply/forward/trash
 
 AKTUALNY CZAS: {{CURRENT_TIME}}
 
@@ -207,18 +264,14 @@ function parseClaudeResponse(raw) {
   const thinkingMatch = raw.match(/"thinking"\s*:\s*"([^"]*)"/);
   const needsInputMatch = raw.match(/"needsInput"\s*:\s*(true|false)/);
 
-  // Wyciągnij response — wszystko między "response": " a ostatniego ", przed "actions"/"thinking"/"needsInput"/}
   const responseStart = raw.indexOf('"response"');
   if (responseStart !== -1) {
-    // Znajdź początek wartości
     const valStart = raw.indexOf('"', responseStart + 10) + 1;
     if (valStart > 0) {
-      // Szukaj końca — ostatnie " przed "actions" lub "thinking" lub "needsInput" lub końcem
       let valEnd = -1;
       for (const marker of ['"actions"', '"thinking"', '"needsInput"']) {
         const idx = raw.indexOf(marker, valStart);
         if (idx !== -1) {
-          // Cofnij do ostatniego " przed markerem
           const sub = raw.substring(valStart, idx);
           const lastQuote = sub.lastIndexOf('"');
           if (
@@ -230,7 +283,6 @@ function parseClaudeResponse(raw) {
         }
       }
       if (valEnd === -1) {
-        // Fallback — ostatnie " w raw
         valEnd = raw.lastIndexOf('"');
       }
 
@@ -263,10 +315,8 @@ function parseClaudeResponse(raw) {
 
 function convertCodeMarkers(text) {
   if (!text) return text;
-  // [CODE:python]...[/CODE] → ```python\n...\n```
   text = text.replace(/\[CODE:(\w+)\]\n?/g, "```$1\n");
   text = text.replace(/\n?\[\/CODE\]/g, "\n```");
-  // [INLINE]...[/INLINE] → `...`
   text = text.replace(/\[INLINE\](.*?)\[\/INLINE\]/g, "`$1`");
   return text;
 }

@@ -36,7 +36,9 @@ export async function uploadRoutes(app) {
 
       fileCount++;
       if (fileCount > MAX_FILES) {
-        return reply.code(400).send({ error: `Maksymalnie ${MAX_FILES} plików` });
+        return reply
+          .code(400)
+          .send({ error: `Maksymalnie ${MAX_FILES} plików` });
       }
 
       const mimeType = part.mimetype || "application/octet-stream";
@@ -56,13 +58,19 @@ export async function uploadRoutes(app) {
       for await (const chunk of part.file) {
         totalSize += chunk.length;
         if (totalSize > MAX_FILE_SIZE) {
-          return reply.code(400).send({ error: `Plik ${part.filename} przekracza ${MAX_FILE_SIZE / 1024 / 1024}MB` });
+          return reply
+            .code(400)
+            .send({
+              error: `Plik ${part.filename} przekracza ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+            });
         }
         chunks.push(chunk);
       }
       const buffer = Buffer.concat(chunks);
 
-      console.log(`📎 [UPLOAD] ${part.filename} (${mimeType}, ${(buffer.length / 1024).toFixed(1)} KB)`);
+      console.log(
+        `📎 [UPLOAD] ${part.filename} (${mimeType}, ${(buffer.length / 1024).toFixed(1)} KB)`,
+      );
 
       // Przetwórz plik (S3 + ekstrakcja)
       const processed = await processFile(buffer, part.filename, mimeType);
@@ -74,5 +82,19 @@ export async function uploadRoutes(app) {
     }
 
     return { files: results, count: results.length };
+  });
+
+  // GET /api/download?key=uploads/2026-05-01/xxx.pdf
+  app.get("/download", async (req, reply) => {
+    const { key } = req.query;
+    if (!key) return reply.code(400).send({ error: "Missing key" });
+
+    try {
+      const { getSignedDownloadUrl } = await import("../services/s3.js");
+      const url = await getSignedDownloadUrl(key);
+      return { url };
+    } catch (err) {
+      return reply.code(500).send({ error: err.message });
+    }
   });
 }
