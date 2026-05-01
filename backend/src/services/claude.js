@@ -2,24 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
-function fixCodeBlocks(text) {
-  if (text.includes("```")) return text;
-  const langPatterns =
-    /\b(python|javascript|typescript|bash|sql|html|css|json|yaml|sh|jsx|tsx|nginx|prisma)\n([\s\S]*?)(?=\n\n[A-ZĄĆĘŁŃÓŚŹŻ]|\n\n$|$)/gi;
-  return text.replace(langPatterns, (match, lang, code) => {
-    const lines = code.trim().split("\n");
-    const looksLikeCode = lines.some(
-      (l) =>
-        /^\s{2,}/.test(l) ||
-        /^(def |class |import |from |const |let |var |function |if |for |while |return |print|console\.)/.test(
-          l.trim(),
-        ),
-    );
-    if (!looksLikeCode || lines.length < 2) return match;
-    return "```" + lang.toLowerCase() + "\n" + code.trimEnd() + "\n```";
-  });
-}
-
 const PRICING = {
   "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
   "claude-haiku-4-5": { input: 1.0, output: 5.0 },
