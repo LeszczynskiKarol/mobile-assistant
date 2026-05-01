@@ -694,3 +694,47 @@ async function findCardId(cardName, boardId, boardName) {
   if (!found) throw new Error(`Nie znaleziono karty "${cardName}"`);
   return found.id;
 }
+
+/**
+ * Zamknij (archiwizuj) board
+ */
+export async function trelloCloseBoard({ boardId, boardName }) {
+  let id = boardId;
+  if (!id && boardName) {
+    const boards = await trelloFetch("/members/me/boards", {
+      fields: "name",
+      filter: "open",
+    });
+    const found = boards.find((b) =>
+      b.name.toLowerCase().includes(boardName.toLowerCase()),
+    );
+    if (!found) throw new Error(`Nie znaleziono boardu "${boardName}"`);
+    id = found.id;
+  }
+  if (!id) throw new Error("Brakuje boardId lub boardName");
+
+  await trelloFetch(`/boards/${id}`, { closed: true }, { method: "PUT" });
+  return { boardId: id, closed: true };
+}
+
+/**
+ * Usuń board na stałe (NIEODWRACALNE!)
+ */
+export async function trelloDeleteBoard({ boardId, boardName }) {
+  let id = boardId;
+  if (!id && boardName) {
+    const boards = await trelloFetch("/members/me/boards", {
+      fields: "name",
+      filter: "all",
+    });
+    const found = boards.find((b) =>
+      b.name.toLowerCase().includes(boardName.toLowerCase()),
+    );
+    if (!found) throw new Error(`Nie znaleziono boardu "${boardName}"`);
+    id = found.id;
+  }
+  if (!id) throw new Error("Brakuje boardId lub boardName");
+
+  await trelloFetch(`/boards/${id}`, {}, { method: "DELETE" });
+  return { boardId: id, deleted: true };
+}

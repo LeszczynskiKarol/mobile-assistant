@@ -76,6 +76,16 @@ DOSTĘPNE AKCJE:
 16. trello_activity — historia aktywności na boardzie (co się ostatnio działo)
    params: { boardId?: string, maxResults?: number (domyślnie 15) }
    To jest akcja ODCZYTOWA — wyniki będą podsumowane
+   17. trello_close_board — zamknij/archiwizuj board (odwracalne)
+    params: { boardId?: string, boardName?: string }
+18. trello_delete_board — usuń board NA STAŁE (NIEODWRACALNE! — zapytaj usera!)
+    params: { boardId?: string, boardName?: string }
+
+TRELLO WORKFLOW — USUWANIE BOARDÓW:
+- "zamknij board X" → trello_close_board (odwracalne, jak archiwizacja)
+- "usuń board X" → NAJPIERW zapytaj o potwierdzenie, POTEM trello_delete_board
+- "usuń wszystkie boardy poza X" → trello_boards → dla każdego boardu (poza X) wywołaj trello_delete_board
+- NIGDY nie usuwaj boardu bez potwierdzenia usera!
 
 WAŻNE — WIELOETAPOWY FLOW TRELLO:
 Gdy user prosi o stworzenie boardu z kartami, użyj WIELU AKCJI w jednym zapytaniu:

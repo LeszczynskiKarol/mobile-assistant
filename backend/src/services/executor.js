@@ -15,6 +15,8 @@ import {
   trelloCreateChecklist,
   trelloToggleCheckItem,
   trelloActivity,
+  trelloCloseBoard,
+  trelloDeleteBoard,
 } from "../actions/trello.js";
 import {
   gmailSend,
@@ -190,6 +192,17 @@ export const ACTION_REGISTRY = {
   },
 
   // ── Trello — odczyt ──
+  trello_close_board: {
+    handler: trelloCloseBoard,
+    description: "Zamknij/archiwizuj board (odwracalne)",
+    params: ["boardId?", "boardName?"],
+  },
+  trello_delete_board: {
+    handler: trelloDeleteBoard,
+    description: "Usuń board na stałe (NIEODWRACALNE!)",
+    params: ["boardId?", "boardName?"],
+  },
+
   trello_boards: {
     handler: trelloListBoards,
     description: "Lista boardów Trello",
